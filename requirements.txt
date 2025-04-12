@@ -1,0 +1,16 @@
+setuptools>=65.5.0
+wheel>=0.38.0
+streamlit>=1.25.0
+selenium>=4.10.0
+webdriver-manager>=4.0.0
+pandas>=2.0.0
+openai>=1.0.0
+anthropic>=0.6.0
+python-dotenv>=1.0.0
+pillow>=9.5.0
+opencv-python>=4.8.0
+undetected-chromedriver==3.4.6
+requests>=2.31.0
+python-dateutil>=2.8.2
+tqdm>=4.65.0
+websocket-client>=1.6.0 
