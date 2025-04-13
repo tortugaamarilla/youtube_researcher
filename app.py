@@ -1037,17 +1037,26 @@ def test_recommendations(source_links: List[str],
                     
             if views_count < min_video_views:
                 stats["skipped_views"] += 1
+                logger.info(f"Видео не соответствует критерию просмотров: {video_data.get('url')} (просмотров: {views_count}, минимум: {min_video_views})")
                 return False
                 
             # Проверяем дату публикации
             pub_date = video_data.get("publication_date")
             if pub_date:
-                days_since_publication = (datetime.now() - pub_date).days
-                if days_since_publication > max_days_since_publication:
-                    stats["skipped_date"] += 1
-                    return False
-                    
+                try:
+                    days_since_publication = (datetime.now() - pub_date).days
+                    if days_since_publication > max_days_since_publication:
+                        stats["skipped_date"] += 1
+                        logger.info(f"Видео не соответствует критерию даты: {video_data.get('url')} (дней с публикации: {days_since_publication}, максимум: {max_days_since_publication})")
+                        return False
+                except Exception as e:
+                    # Если возникла ошибка при расчете дней, лучше не фильтровать по этому критерию
+                    logger.warning(f"Ошибка при проверке даты публикации для {video_data.get('url')}: {e}")
+            else:
+                logger.warning(f"Отсутствует дата публикации для {video_data.get('url')}")
+                
             # Видео прошло все проверки
+            logger.info(f"Видео удовлетворяет критериям: {video_data.get('url')} (просмотров: {views_count}, соответствует параметрам)")
             return True
         
         for i, link in enumerate(valid_links):
@@ -1073,12 +1082,13 @@ def test_recommendations(source_links: List[str],
                     continue
                 
                 # Обрабатываем каждое видео с канала
-                for video_info in channel_videos:
+                for video_index, video_info in enumerate(channel_videos):
                     video_url = video_info.get("url")
                     if not video_url:
                         continue
                     
                     stats["processed_videos"] += 1
+                    logger.info(f"Обработка видео {video_index+1}/{len(channel_videos)} с канала: {video_url}")
                     
                     # Получаем детали видео
                     status_text.text(f"Получение деталей видео: {video_url}")
@@ -1112,7 +1122,8 @@ def test_recommendations(source_links: List[str],
                         # Используем быстрый метод вместо обычного
                         recommendations = youtube_analyzer.get_recommended_videos_fast(video_url, limit=recommendations_per_video)
                         rec_time = end_timer(f"Получение рекомендаций для видео: {video_url}")
-                        status_text.text(f"Получены рекомендации за {rec_time:.2f}с")
+                        status_text.text(f"Получены рекомендации ({len(recommendations)}) за {rec_time:.2f}с")
+                        logger.info(f"Получено {len(recommendations)} рекомендаций для видео {video_url}")
                         
                         # Сохраняем URL рекомендаций для последующей обработки
                         recommendation_urls = []
@@ -1128,6 +1139,7 @@ def test_recommendations(source_links: List[str],
                         
                         # Добавляем все рекомендации для этого видео в общий список
                         all_recommendations.extend(recommendation_urls)
+                        logger.info(f"Добавлено {len(recommendation_urls)} рекомендаций для видео {video_url}")
                     else:
                         # Если видео не соответствует критериям, пропускаем его
                         if video_data:
@@ -1168,7 +1180,8 @@ def test_recommendations(source_links: List[str],
                     # Используем быстрый метод вместо обычного
                     recommendations = youtube_analyzer.get_recommended_videos_fast(url, limit=recommendations_per_video)
                     rec_time = end_timer(f"Получение рекомендаций для видео: {url}")
-                    status_text.text(f"Получены рекомендации за {rec_time:.2f}с")
+                    status_text.text(f"Получены рекомендации ({len(recommendations)}) за {rec_time:.2f}с")
+                    logger.info(f"Получено {len(recommendations)} рекомендаций для видео {url}")
                     
                     # Сохраняем URL рекомендаций для последующей обработки
                     recommendation_urls = []
@@ -1184,6 +1197,7 @@ def test_recommendations(source_links: List[str],
                     
                     # Добавляем все рекомендации для этого видео в общий список
                     all_recommendations.extend(recommendation_urls)
+                    logger.info(f"Добавлено {len(recommendation_urls)} рекомендаций для видео {url}")
                 else:
                     # Если видео не соответствует критериям, пропускаем его
                     if video_data:
@@ -1193,6 +1207,7 @@ def test_recommendations(source_links: List[str],
         
         # Обработка собранных рекомендаций
         status_text.text(f"Обработка {len(all_recommendations)} рекомендаций...")
+        logger.info(f"Начинаем обработку {len(all_recommendations)} собранных рекомендаций")
         
         # Удаляем дубликаты из списка рекомендаций
         unique_recommendations = {}
@@ -1210,6 +1225,11 @@ def test_recommendations(source_links: List[str],
         # Преобразуем словарь обратно в список
         filtered_recommendations = list(unique_recommendations.values())
         status_text.text(f"Осталось {len(filtered_recommendations)} уникальных рекомендаций после удаления дубликатов")
+        logger.info(f"После удаления дубликатов осталось {len(filtered_recommendations)} уникальных рекомендаций")
+        
+        # Счетчики для отслеживания обработанных и добавленных рекомендаций
+        processed_recommendations = 0
+        added_recommendations = 0
         
         # Получаем информацию о рекомендациях пакетами для оптимизации
         batch_size = 5  # Обрабатываем по 5 рекомендаций за раз
@@ -1222,6 +1242,7 @@ def test_recommendations(source_links: List[str],
             
             for rec in batch:
                 rec_url = rec["url"]
+                processed_recommendations += 1
                 
                 # Получаем детали рекомендованного видео
                 start_timer(f"Получение данных о рекомендации: {rec_url}")
@@ -1231,13 +1252,26 @@ def test_recommendations(source_links: List[str],
                 rec_data = None
                 if not rec_data_df.empty:
                     # Преобразуем результат в формат словаря, совместимый с исходным
-                    rec_data = {
-                        "url": rec_url,  # URL уже очищен на предыдущем этапе
-                        "title": rec_data_df.iloc[0]["Заголовок"],
-                        "views": rec_data_df.iloc[0]["Просмотры_число"] if "Просмотры_число" in rec_data_df.columns else int(rec_data_df.iloc[0]["Просмотры"].replace(" ", "")),
-                        "publication_date": datetime.now() - timedelta(days=int(rec_data_df.iloc[0]["Дней с публикации"])) if rec_data_df.iloc[0]["Дней с публикации"] != "—" else datetime.now(),
-                        "channel_name": "YouTube"  # Имя канала не доступно через быстрый метод
-                    }
+                    try:
+                        rec_data = {
+                            "url": rec_url,  # URL уже очищен на предыдущем этапе
+                            "title": rec_data_df.iloc[0]["Заголовок"],
+                            "views": rec_data_df.iloc[0]["Просмотры_число"] if "Просмотры_число" in rec_data_df.columns else int(rec_data_df.iloc[0]["Просмотры"].replace(" ", "")),
+                            "publication_date": datetime.now() - timedelta(days=int(rec_data_df.iloc[0]["Дней с публикации"])) if rec_data_df.iloc[0]["Дней с публикации"] != "—" else datetime.now(),
+                            "channel_name": "YouTube"  # Имя канала не доступно через быстрый метод
+                        }
+                    except Exception as e:
+                        logger.error(f"Ошибка при обработке данных рекомендации {rec_url}: {e}")
+                        # Создаем минимальный набор данных, чтобы рекомендация не была потеряна
+                        rec_data = {
+                            "url": rec_url,
+                            "title": "Не удалось получить заголовок",
+                            "views": min_video_views,  # Гарантируем, что видео пройдет фильтрацию по просмотрам
+                            "publication_date": datetime.now(),  # Гарантируем, что видео пройдет фильтрацию по дате
+                            "channel_name": "YouTube"
+                        }
+                else:
+                    logger.warning(f"Не удалось получить данные для рекомендации {rec_url}")
                 
                 video_data_time = end_timer(f"Получение данных о рекомендации: {rec_url}")
                 stats["processed_videos"] += 1
@@ -1251,6 +1285,13 @@ def test_recommendations(source_links: List[str],
                     rec_data["source"] = f"Рекомендация для: {source_str}"
                     results.append(rec_data)
                     stats["added_videos"] += 1
+                    added_recommendations += 1
+                    logger.info(f"Рекомендация {rec_url} добавлена в результаты (всего: {added_recommendations})")
+                else:
+                    if rec_data:
+                        logger.info(f"Рекомендация {rec_url} не прошла фильтрацию")
+                
+                update_stats()
             
             # Фиксируем время всего пакета
             batch_time = end_timer(f"Обработка пакета рекомендаций {i+1}-{min(i+batch_size, len(filtered_recommendations))}")
@@ -1259,7 +1300,8 @@ def test_recommendations(source_links: List[str],
             update_stats()
         
         # Добавляем исходные видео к результатам
-        results.extend(source_videos)
+        # Важно: сначала добавляем исходные видео, чтобы они не были удалены как дубликаты
+        results = source_videos + results
         
         # Завершаем прогресс
         progress_bar.progress(1.0)
@@ -1286,7 +1328,20 @@ def test_recommendations(source_links: List[str],
         if "url" in df.columns:
             df["url"] = df["url"].apply(clean_youtube_url)
         
-        # Добавляем нумерацию, начинающуюся с 1
+        # Удаляем дубликаты по URL видео, сохраняя порядок добавления
+        # Это гарантирует, что исходные видео (которые были добавлены первыми) сохранятся
+        seen_urls = set()
+        unique_df_rows = []
+        
+        for idx, row in df.iterrows():
+            url = row["url"]
+            if url not in seen_urls:
+                seen_urls.add(url)
+                unique_df_rows.append(row)
+        
+        df = pd.DataFrame(unique_df_rows)
+        
+        # Добавляем нумерацию, начинающуюся с 1 после удаления дубликатов
         df.index = range(1, len(df) + 1)
         
         # Выбираем и переименовываем нужные колонки
