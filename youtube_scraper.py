@@ -2589,6 +2589,7 @@ class YouTubeAnalyzer:
                         "Заголовок": "Ошибка: неверный формат URL",
                         "Дней с публикации": None,
                         "Просмотры": None,
+                        "Канал URL": None,
                         "Ошибка": "Неверный формат URL"
                     })
                     continue
@@ -2606,6 +2607,7 @@ class YouTubeAnalyzer:
                         "Заголовок": f"Ошибка: код {response.status_code}",
                         "Дней с публикации": None,
                         "Просмотры": None,
+                        "Канал URL": None,
                         "Ошибка": f"Код ответа: {response.status_code}"
                     })
                     continue
@@ -2622,6 +2624,7 @@ class YouTubeAnalyzer:
                     title = None
                     views = None
                     publish_date = None
+                    channel_url = None
                     
                     # Проверяем наличие данных о видео через ytInitialPlayerResponse
                     if player_response_match:
@@ -2643,11 +2646,17 @@ class YouTubeAnalyzer:
                                 if 'publishDate' in micro_format:
                                     publish_date_str = micro_format['publishDate']
                                     publish_date = datetime.strptime(publish_date_str, "%Y-%m-%d")
+                                
+                                # Извлекаем URL канала из microformat
+                                if 'ownerProfileUrl' in micro_format:
+                                    channel_url = micro_format['ownerProfileUrl']
+                                    if not channel_url.startswith('http'):
+                                        channel_url = 'https://www.youtube.com' + channel_url
                         except Exception as date_error:
                             logger.warning(f"Ошибка при обработке даты: {date_error}")
                     
                     # Если метаданные не найдены, используем альтернативный метод
-                    if ytInitialData_match and (title is None or views is None or publish_date is None):
+                    if ytInitialData_match and (title is None or views is None or publish_date is None or channel_url is None):
                         data = json.loads(ytInitialData_match.group(1))
                         
                         # Извлекаем заголовок (если не найден ранее)
@@ -2665,6 +2674,26 @@ class YouTubeAnalyzer:
                                         title = ''.join(run.get('text', '') for run in title_runs)
                             except Exception as title_error:
                                 logger.warning(f"Ошибка при извлечении заголовка: {title_error}")
+                        
+                        # Извлекаем URL канала (если не найден ранее)
+                        if channel_url is None:
+                            try:
+                                video_secondary_info = None
+                                for renderer in data.get('contents', {}).get('twoColumnWatchNextResults', {}).get('results', {}).get('results', {}).get('contents', []):
+                                    if 'videoSecondaryInfoRenderer' in renderer:
+                                        video_secondary_info = renderer['videoSecondaryInfoRenderer']
+                                        break
+                                
+                                if video_secondary_info and 'owner' in video_secondary_info:
+                                    owner_info = video_secondary_info['owner'].get('videoOwnerRenderer', {})
+                                    if 'navigationEndpoint' in owner_info:
+                                        browse_endpoint = owner_info['navigationEndpoint'].get('browseEndpoint', {})
+                                        if 'canonicalBaseUrl' in browse_endpoint:
+                                            channel_url = 'https://www.youtube.com' + browse_endpoint['canonicalBaseUrl']
+                                        elif 'browseId' in browse_endpoint:
+                                            channel_url = f"https://www.youtube.com/channel/{browse_endpoint['browseId']}"
+                            except Exception as channel_error:
+                                logger.warning(f"Ошибка при извлечении URL канала: {channel_error}")
                         
                         # Извлекаем количество просмотров (если не найдено ранее)
                         if views is None:
@@ -2739,6 +2768,7 @@ class YouTubeAnalyzer:
                         "Заголовок": title if title else "Нет заголовка",
                         "Дней с публикации": days_since_publication,
                         "Просмотры": views if views is not None else 0,
+                        "Канал URL": channel_url,
                         "Ошибка": None
                     }
                     
@@ -2749,6 +2779,14 @@ class YouTubeAnalyzer:
                         # Извлекаем заголовок
                         title_match = re.search(r'<title>([^<]+)</title>', html_content)
                         title = title_match.group(1).replace(' - YouTube', '') if title_match else "Нет заголовка"
+                        
+                        # Извлекаем URL канала
+                        channel_url_match = re.search(r'<link itemprop="url" href="([^"]+)">', html_content) or re.search(r'<link rel="canonical" href="([^"]+)">', html_content)
+                        channel_url = None
+                        if channel_url_match:
+                            channel_url_candidate = channel_url_match.group(1)
+                            if "/channel/" in channel_url_candidate or "/c/" in channel_url_candidate or "/@" in channel_url_candidate:
+                                channel_url = channel_url_candidate
                         
                         # Извлекаем количество просмотров с учетом разных форматов
                         views_match = re.search(r'"viewCount":\s*"(\d+)"', html_content)
@@ -2780,6 +2818,7 @@ class YouTubeAnalyzer:
                             "Заголовок": title,
                             "Дней с публикации": days_since_publication,
                             "Просмотры": views,
+                            "Канал URL": channel_url,
                             "Ошибка": None
                         }
                         
@@ -2790,6 +2829,7 @@ class YouTubeAnalyzer:
                             "Заголовок": "Ошибка при извлечении данных",
                             "Дней с публикации": None,
                             "Просмотры": None,
+                            "Канал URL": None,
                             "Ошибка": str(extract_error)
                         }
                 
@@ -2802,6 +2842,7 @@ class YouTubeAnalyzer:
                     "Заголовок": "Ошибка",
                     "Дней с публикации": None,
                     "Просмотры": None,
+                    "Канал URL": None,
                     "Ошибка": str(e)
                 })
         

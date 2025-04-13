@@ -1167,7 +1167,8 @@ def test_recommendations(source_links: List[str],
                             "title": video_data_df.iloc[0]["Заголовок"],
                             "views": video_data_df.iloc[0]["Просмотры_число"] if "Просмотры_число" in video_data_df.columns else int(video_data_df.iloc[0]["Просмотры"].replace(" ", "")),
                             "publication_date": datetime.now() - timedelta(days=int(video_data_df.iloc[0]["Дней с публикации"])) if video_data_df.iloc[0]["Дней с публикации"] != "—" else datetime.now(),
-                            "channel_name": "YouTube"  # Имя канала не доступно через быстрый метод
+                            "channel_name": "YouTube",  # Имя канала не доступно через быстрый метод
+                            "channel_url": video_data_df.iloc[0]["Канал URL"] if "Канал URL" in video_data_df.columns else None
                         }
                     
                     video_data_time = end_timer(f"Получение данных о видео: {video_url}")
@@ -1228,7 +1229,8 @@ def test_recommendations(source_links: List[str],
                         "title": video_data_df.iloc[0]["Заголовок"],
                         "views": video_data_df.iloc[0]["Просмотры_число"] if "Просмотры_число" in video_data_df.columns else int(video_data_df.iloc[0]["Просмотры"].replace(" ", "")),
                         "publication_date": datetime.now() - timedelta(days=int(video_data_df.iloc[0]["Дней с публикации"])) if video_data_df.iloc[0]["Дней с публикации"] != "—" else datetime.now(),
-                        "channel_name": "YouTube"  # Имя канала не доступно через быстрый метод
+                        "channel_name": "YouTube",  # Имя канала не доступно через быстрый метод
+                        "channel_url": video_data_df.iloc[0]["Канал URL"] if "Канал URL" in video_data_df.columns else None
                     }
                 
                 video_data_time = end_timer(f"Получение данных о видео: {url}")
@@ -1326,7 +1328,8 @@ def test_recommendations(source_links: List[str],
                             "title": rec_data_df.iloc[0]["Заголовок"],
                             "views": rec_data_df.iloc[0]["Просмотры_число"] if "Просмотры_число" in rec_data_df.columns else int(rec_data_df.iloc[0]["Просмотры"].replace(" ", "")),
                             "publication_date": datetime.now() - timedelta(days=int(rec_data_df.iloc[0]["Дней с публикации"])) if rec_data_df.iloc[0]["Дней с публикации"] != "—" else datetime.now(),
-                            "channel_name": "YouTube"  # Имя канала не доступно через быстрый метод
+                            "channel_name": "YouTube",  # Имя канала не доступно через быстрый метод
+                            "channel_url": rec_data_df.iloc[0]["Канал URL"] if "Канал URL" in rec_data_df.columns else None
                         }
                     except Exception as e:
                         logger.error(f"Ошибка при обработке данных рекомендации {rec_url}: {e}")
@@ -1336,7 +1339,8 @@ def test_recommendations(source_links: List[str],
                             "title": "Не удалось получить заголовок",
                             "views": min_video_views,  # Гарантируем, что видео пройдет фильтрацию по просмотрам
                             "publication_date": datetime.now(),  # Гарантируем, что видео пройдет фильтрацию по дате
-                            "channel_name": "YouTube"
+                            "channel_name": "YouTube",
+                            "channel_url": None
                         }
                 else:
                     logger.warning(f"Не удалось получить данные для рекомендации {rec_url}")
@@ -1420,7 +1424,8 @@ def test_recommendations(source_links: List[str],
             "title": "Заголовок видео",
             "publication_date": "Дата публикации",
             "views": "Количество просмотров",
-            "source": "Источник видео"
+            "source": "Источник видео",
+            "channel_url": "Канал"
         }
         
         # Фильтруем только существующие колонки
@@ -1437,6 +1442,12 @@ def test_recommendations(source_links: List[str],
             df["Ссылка на видео"] = df["Ссылка на видео"].apply(
                 lambda x: f'<a href="{x}" target="_blank">{x}</a>' if isinstance(x, str) else x
             )
+            
+            # Преобразуем ссылки на каналы в активные для отображения в Streamlit
+            if "Канал" in df.columns:
+                df["Канал"] = df["Канал"].apply(
+                    lambda x: f'<a href="{x}" target="_blank">{x.split("@")[1] if "@" in x else x}</a>' if isinstance(x, str) and x else x
+                )
             
             return df
         else:
@@ -2121,9 +2132,9 @@ def display_results_tab1():
         if "Ссылка на видео" in export_df.columns:
             export_df["Ссылка на видео"] = export_df["Ссылка на видео"].str.replace(r'<a href="(.+?)".*?>.*?</a>', r'\1', regex=True)
         
-        csv = export_df.to_csv(index=False)
+        csv = export_df.to_csv(index=False, sep='\t')
         b64 = base64.b64encode(csv.encode()).decode()
-        href = f'<div style="text-align: right; margin: 10px 0;"><a href="data:file/csv;base64,{b64}" download="youtube_results.csv" style="background-color: #4CAF50; color: white; padding: 8px 16px; text-decoration: none; border-radius: 4px;">📊 Скачать CSV файл</a></div>'
+        href = f'<div style="text-align: right; margin: 10px 0;"><a href="data:file/csv;base64,{b64}" download="youtube_results.tsv" style="background-color: #4CAF50; color: white; padding: 8px 16px; text-decoration: none; border-radius: 4px;">📊 Скачать TSV файл</a></div>'
         st.markdown(href, unsafe_allow_html=True)
 
 # Добавляем функцию для отображения результатов на вкладке "Релевантность"
@@ -2141,9 +2152,9 @@ def display_results_tab2():
         if "Ссылка на видео" in export_df.columns:
             export_df["Ссылка на видео"] = export_df["Ссылка на видео"].str.replace(r'<a href="(.+?)".*?>.*?</a>', r'\1', regex=True)
         
-        csv = export_df.to_csv(index=False)
+        csv = export_df.to_csv(index=False, sep='\t')
         b64 = base64.b64encode(csv.encode()).decode()
-        href = f'<div style="text-align: right; margin: 10px 0;"><a href="data:file/csv;base64,{b64}" download="youtube_filtered_results.csv" style="background-color: #4CAF50; color: white; padding: 8px 16px; text-decoration: none; border-radius: 4px;">📊 Скачать CSV файл</a></div>'
+        href = f'<div style="text-align: right; margin: 10px 0;"><a href="data:file/csv;base64,{b64}" download="youtube_filtered_results.tsv" style="background-color: #4CAF50; color: white; padding: 8px 16px; text-decoration: none; border-radius: 4px;">📊 Скачать TSV файл</a></div>'
         st.markdown(href, unsafe_allow_html=True)
 
 # Добавляем функцию для отображения результатов на вкладке "Результаты"
@@ -2168,9 +2179,9 @@ def display_results_tab3():
     if "Ссылка на видео" in export_df.columns:
         export_df["Ссылка на видео"] = export_df["Ссылка на видео"].str.replace(r'<a href="(.+?)".*?>.*?</a>', r'\1', regex=True)
     
-    csv = export_df.to_csv(index=False)
+    csv = export_df.to_csv(index=False, sep='\t')
     b64 = base64.b64encode(csv.encode()).decode()
-    href = f'<div style="text-align: right; margin: 10px 0;"><a href="data:file/csv;base64,{b64}" download="youtube_final_results.csv" style="background-color: #4CAF50; color: white; padding: 8px 16px; text-decoration: none; border-radius: 4px;">📊 Скачать CSV файл</a></div>'
+    href = f'<div style="text-align: right; margin: 10px 0;"><a href="data:file/csv;base64,{b64}" download="youtube_final_results.tsv" style="background-color: #4CAF50; color: white; padding: 8px 16px; text-decoration: none; border-radius: 4px;">📊 Скачать TSV файл</a></div>'
     st.markdown(href, unsafe_allow_html=True)
 
 if __name__ == "__main__":
