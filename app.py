@@ -180,21 +180,45 @@ def get_video_data(url: str, _youtube_analyzer: YouTubeAnalyzer, max_retries: in
         logger.info(f"Использование кэшированных данных для {url}")
         return cached_data[url]
     
-    # Получаем данные с повторными попытками
+    # Получаем данные с повторными попытками через быстрый метод
     for attempt in range(max_retries):
         try:
             logger.info(f"Попытка {attempt+1}/{max_retries} получения данных видео: {url}")
-            video_data = _youtube_analyzer.get_video_details(url)
             
-            if video_data and video_data.get("title") and video_data["title"] != "Недоступно":
+            # Используем быстрый метод вместо Selenium
+            df = _youtube_analyzer.test_video_parameters_fast([url])
+            
+            if not df.empty:
+                # Преобразуем результаты в словарь
+                video_data = {
+                    "url": url,
+                    "title": df.iloc[0]["Заголовок"],
+                    "views": df.iloc[0]["Просмотры_число"] if "Просмотры_число" in df.columns else int(df.iloc[0]["Просмотры"].replace(" ", "")),
+                    "publication_date": datetime.now() - timedelta(days=int(df.iloc[0]["Дней с публикации"])) if df.iloc[0]["Дней с публикации"] != "—" else datetime.now(),
+                    "days_since_publication": int(df.iloc[0]["Дней с публикации"]) if df.iloc[0]["Дней с публикации"] != "—" else 0,
+                    "channel_name": "YouTube" # Примечание: быстрый метод не извлекает имя канала
+                }
+                
                 logger.info(f"Успешно получены данные для {url}")
                 return video_data
             else:
                 logger.warning(f"Попытка {attempt+1}: Не удалось получить полные данные для {url}")
                 time.sleep(1)  # Короткая пауза перед повторной попыткой
+        
         except Exception as e:
             logger.error(f"Ошибка при получении данных для {url} (попытка {attempt+1}): {e}")
             time.sleep(1)
+    
+    # Если быстрый метод не сработал, пробуем запасной вариант через Selenium
+    try:
+        logger.info(f"Используем запасной вариант через Selenium для {url}")
+        video_data = _youtube_analyzer.get_video_details(url)
+        
+        if video_data and video_data.get("title") and video_data["title"] != "Недоступно":
+            logger.info(f"Успешно получены данные через Selenium для {url}")
+            return video_data
+    except Exception as e:
+        logger.error(f"Ошибка при использовании запасного варианта для {url}: {e}")
     
     # Возвращаем базовую информацию, если все попытки не удались
     logger.warning(f"Все попытки получить данные для {url} не удались. Возвращаем базовую информацию.")
@@ -1738,6 +1762,9 @@ def render_video_tester_section():
             placeholder="https://www.youtube.com/watch?v=..."
         )
         
+        # Опция быстрого анализа
+        use_fast_method = st.checkbox("Использовать быстрый метод анализа (рекомендуется)", value=True)
+        
         # Кнопка для запуска анализа
         start_analysis = st.button("Проанализировать видео")
         
@@ -1764,22 +1791,43 @@ def render_video_tester_section():
                 st.error(f"Следующие URL имеют неверный формат:\n" + "\n".join(invalid_urls))
                 return
             
-            # Запускаем анализ с индикатором прогресса
-            with st.spinner("Анализ видео..."):
+            # Запускаем анализ с индикатором прогресса и замером времени
+            start_time = time.time()
+            
+            with st.spinner(f"Анализ {len(valid_urls)} видео..."):
+                progress_bar = st.progress(0)
+                
                 try:
                     # Инициализируем YouTube анализатор
                     analyzer = YouTubeAnalyzer(headless=True, use_proxy=False)
                     
                     # Получаем и обрабатываем результаты
-                    results_df = analyzer.test_video_parameters(valid_urls)
+                    if use_fast_method:
+                        results_df = analyzer.test_video_parameters_fast(valid_urls)
+                    else:
+                        results_df = analyzer.test_video_parameters(valid_urls)
+                    
+                    # Обновляем прогресс-бар до 100%
+                    progress_bar.progress(100)
                     
                     # Закрываем драйвер
                     analyzer.quit_driver()
                     
+                    # Вычисляем время выполнения
+                    elapsed_time = time.time() - start_time
+                    
                     # Отображаем результаты
                     if not results_df.empty:
-                        st.success(f"Анализ завершен! Проанализировано {len(results_df)} видео.")
-                        st.dataframe(results_df)
+                        st.success(f"Анализ завершен за {elapsed_time:.2f} сек! Проанализировано {len(results_df)} видео.")
+                        
+                        # Преобразуем столбец просмотров в числовые значения для сортировки, если есть
+                        if "Просмотры_число" in results_df.columns:
+                            sorting_df = results_df.sort_values(by="Просмотры_число", ascending=False)
+                            # Удаляем служебный столбец перед отображением
+                            sorting_df = sorting_df.drop("Просмотры_число", axis=1)
+                            st.dataframe(sorting_df)
+                        else:
+                            st.dataframe(results_df)
                     else:
                         st.warning("Не удалось получить данные о видео.")
                 

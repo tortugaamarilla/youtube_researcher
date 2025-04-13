@@ -2525,48 +2525,248 @@ class YouTubeAnalyzer:
         """
         logger.info(f"Запуск тестирования параметров для {len(video_urls)} видео")
         
+        # Используем быстрый метод вместо полного запуска браузера
+        return self.test_video_parameters_fast(video_urls)
+
+    def test_video_parameters_fast(self, video_urls: List[str]) -> pd.DataFrame:
+        """
+        Быстрый способ тестирования параметров видео без запуска полного браузера.
+        Использует прямые HTTP запросы для получения данных.
+        
+        Args:
+            video_urls (List[str]): Список URL видео для анализа.
+            
+        Returns:
+            pd.DataFrame: Таблица с параметрами видео (URL, заголовок, дни с момента публикации, просмотры).
+        """
+        logger.info(f"Запуск быстрого тестирования параметров для {len(video_urls)} видео")
+        
         results = []
         
-        # Проверяем, инициализирован ли драйвер
-        if self.driver is None:
-            try:
-                logger.info("Драйвер не инициализирован, пытаемся инициализировать в test_video_parameters")
-                self.setup_driver()
-                # Проверяем еще раз после инициализации
-                if self.driver is None:
-                    logger.error("Не удалось инициализировать драйвер в test_video_parameters")
-                    return pd.DataFrame(columns=["URL", "Заголовок", "Дней с публикации", "Просмотры", "Ошибка"])
-            except Exception as e:
-                logger.error(f"Ошибка при инициализации драйвера в test_video_parameters: {e}")
-                return pd.DataFrame(columns=["URL", "Заголовок", "Дней с публикации", "Просмотры", "Ошибка"])
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7"
+        }
         
         for url in video_urls:
             try:
-                logger.info(f"Анализ видео: {url}")
+                # Извлекаем ID видео из URL
+                video_id = None
+                if "youtube.com/watch?v=" in url:
+                    video_id = url.split("watch?v=")[1].split("&")[0]
+                elif "youtu.be/" in url:
+                    video_id = url.split("youtu.be/")[1].split("?")[0]
                 
-                # Получаем данные о видео
-                video_info = self.get_video_details(url)
+                if not video_id:
+                    logger.warning(f"Не удалось извлечь ID видео из URL: {url}")
+                    results.append({
+                        "URL": url,
+                        "Заголовок": "Ошибка: неверный формат URL",
+                        "Дней с публикации": None,
+                        "Просмотры": None,
+                        "Ошибка": "Неверный формат URL"
+                    })
+                    continue
                 
-                # Вычисляем количество дней с момента публикации
-                days_since_publication = None
-                if "publication_date" in video_info and video_info["publication_date"]:
-                    pub_date = video_info["publication_date"]
-                    days_since_publication = (datetime.now() - pub_date).days
+                # Формируем URL для запроса
+                request_url = f"https://www.youtube.com/watch?v={video_id}"
                 
-                # Получаем количество просмотров
-                views = video_info.get("views", 0)
+                # Делаем запрос к странице видео
+                response = requests.get(request_url, headers=headers, timeout=10)
                 
-                # Получаем заголовок
-                title = video_info.get("title", "Нет заголовка")
+                if response.status_code != 200:
+                    logger.warning(f"Не удалось получить страницу видео, код: {response.status_code}")
+                    results.append({
+                        "URL": url,
+                        "Заголовок": f"Ошибка: код {response.status_code}",
+                        "Дней с публикации": None,
+                        "Просмотры": None,
+                        "Ошибка": f"Код ответа: {response.status_code}"
+                    })
+                    continue
                 
-                # Формируем запись для результата
-                result = {
-                    "URL": url,
-                    "Заголовок": title,
-                    "Дней с публикации": days_since_publication,
-                    "Просмотры": views,
-                    "Ошибка": None
-                }
+                html_content = response.text
+                
+                # Извлекаем метаданные из ответа (два подхода)
+                # 1. Через JSON-данные, встроенные в страницу
+                try:
+                    # Поиск JSON-данных в HTML
+                    ytInitialData_match = re.search(r'ytInitialData\s*=\s*({.+?});</script>', html_content)
+                    player_response_match = re.search(r'var ytInitialPlayerResponse\s*=\s*({.+?});</script>', html_content)
+                    
+                    title = None
+                    views = None
+                    publish_date = None
+                    
+                    # Проверяем наличие данных о видео через ytInitialPlayerResponse
+                    if player_response_match:
+                        player_data = json.loads(player_response_match.group(1))
+                        
+                        # Извлекаем заголовок
+                        if 'videoDetails' in player_data and 'title' in player_data['videoDetails']:
+                            title = player_data['videoDetails']['title']
+                        
+                        # Извлекаем количество просмотров (как строку)
+                        if 'videoDetails' in player_data and 'viewCount' in player_data['videoDetails']:
+                            views_str = player_data['videoDetails']['viewCount']
+                            views = int(views_str)
+                        
+                        # Извлекаем дату публикации
+                        try:
+                            if 'microformat' in player_data and 'playerMicroformatRenderer' in player_data['microformat']:
+                                micro_format = player_data['microformat']['playerMicroformatRenderer']
+                                if 'publishDate' in micro_format:
+                                    publish_date_str = micro_format['publishDate']
+                                    publish_date = datetime.strptime(publish_date_str, "%Y-%m-%d")
+                        except Exception as date_error:
+                            logger.warning(f"Ошибка при обработке даты: {date_error}")
+                    
+                    # Если метаданные не найдены, используем альтернативный метод
+                    if ytInitialData_match and (title is None or views is None or publish_date is None):
+                        data = json.loads(ytInitialData_match.group(1))
+                        
+                        # Извлекаем заголовок (если не найден ранее)
+                        if title is None:
+                            try:
+                                video_primary_info = None
+                                for renderer in data.get('contents', {}).get('twoColumnWatchNextResults', {}).get('results', {}).get('results', {}).get('contents', []):
+                                    if 'videoPrimaryInfoRenderer' in renderer:
+                                        video_primary_info = renderer['videoPrimaryInfoRenderer']
+                                        break
+                                
+                                if video_primary_info and 'title' in video_primary_info:
+                                    title_runs = video_primary_info['title'].get('runs', [])
+                                    if title_runs:
+                                        title = ''.join(run.get('text', '') for run in title_runs)
+                            except Exception as title_error:
+                                logger.warning(f"Ошибка при извлечении заголовка: {title_error}")
+                        
+                        # Извлекаем количество просмотров (если не найдено ранее)
+                        if views is None:
+                            try:
+                                video_primary_info = None
+                                for renderer in data.get('contents', {}).get('twoColumnWatchNextResults', {}).get('results', {}).get('results', {}).get('contents', []):
+                                    if 'videoPrimaryInfoRenderer' in renderer:
+                                        video_primary_info = renderer['videoPrimaryInfoRenderer']
+                                        break
+                                
+                                if video_primary_info and 'viewCount' in video_primary_info:
+                                    view_count_renderer = video_primary_info['viewCount'].get('videoViewCountRenderer', {})
+                                    if 'viewCount' in view_count_renderer:
+                                        views_text = view_count_renderer['viewCount'].get('simpleText', '')
+                                        if not views_text and 'runs' in view_count_renderer['viewCount']:
+                                            views_text = ''.join(run.get('text', '') for run in view_count_renderer['viewCount']['runs'])
+                                        
+                                        # Обработка строки с числом просмотров (форматы: "123 456 просмотров", "123,456 views", "1.2K views" и т.д.)
+                                        views_str = re.sub(r'[^\d.,K]', '', views_text)
+                                        
+                                        # Обработка K, M, B суффиксов
+                                        if 'K' in views_str or 'k' in views_str:
+                                            views_str = views_str.replace('K', '').replace('k', '')
+                                            views = int(float(views_str.replace(',', '.')) * 1000)
+                                        elif 'M' in views_str or 'm' in views_str:
+                                            views_str = views_str.replace('M', '').replace('m', '')
+                                            views = int(float(views_str.replace(',', '.')) * 1000000)
+                                        elif 'B' in views_str or 'b' in views_str:
+                                            views_str = views_str.replace('B', '').replace('b', '')
+                                            views = int(float(views_str.replace(',', '.')) * 1000000000)
+                                        else:
+                                            # Очищаем строку от разделителей
+                                            views_str = views_str.replace(' ', '').replace(',', '')
+                                            views = int(views_str) if views_str else 0
+                            except Exception as views_error:
+                                logger.warning(f"Ошибка при извлечении просмотров: {views_error}")
+                    
+                    # Если данные всё ещё не найдены, попробуем извлечь их из метатегов HTML
+                    if title is None or views is None or publish_date is None:
+                        # Извлекаем заголовок из метатегов
+                        if title is None:
+                            title_match = re.search(r'<meta\s+name="title"\s+content="([^"]+)"', html_content)
+                            if title_match:
+                                title = title_match.group(1)
+                            else:
+                                # Альтернативный поиск по og:title
+                                title_match = re.search(r'<meta\s+property="og:title"\s+content="([^"]+)"', html_content)
+                                if title_match:
+                                    title = title_match.group(1)
+                        
+                        # Поиск даты публикации
+                        if publish_date is None:
+                            date_match = re.search(r'<meta\s+itemprop="datePublished"\s+content="([^"]+)"', html_content)
+                            if date_match:
+                                publish_date_str = date_match.group(1)
+                                try:
+                                    if 'T' in publish_date_str:
+                                        publish_date = datetime.strptime(publish_date_str.split('T')[0], "%Y-%m-%d")
+                                    else:
+                                        publish_date = datetime.strptime(publish_date_str, "%Y-%m-%d")
+                                except Exception as e:
+                                    logger.warning(f"Ошибка при парсинге даты публикации из метатегов: {e}")
+                
+                    # Расчет количества дней с момента публикации
+                    days_since_publication = None
+                    if publish_date:
+                        days_since_publication = (datetime.now() - publish_date).days
+                    
+                    # Формируем запись для результата
+                    result = {
+                        "URL": url,
+                        "Заголовок": title if title else "Нет заголовка",
+                        "Дней с публикации": days_since_publication,
+                        "Просмотры": views if views is not None else 0,
+                        "Ошибка": None
+                    }
+                    
+                except Exception as extract_error:
+                    logger.error(f"Ошибка при извлечении данных из JSON: {extract_error}")
+                    # Резервный метод через регулярные выражения
+                    try:
+                        # Извлекаем заголовок
+                        title_match = re.search(r'<title>([^<]+)</title>', html_content)
+                        title = title_match.group(1).replace(' - YouTube', '') if title_match else "Нет заголовка"
+                        
+                        # Извлекаем количество просмотров с учетом разных форматов
+                        views_match = re.search(r'"viewCount":\s*"(\d+)"', html_content)
+                        views = int(views_match.group(1)) if views_match else 0
+                        
+                        if not views:
+                            # Альтернативный поиск просмотров
+                            views_match = re.search(r'(\d[\d\s,.]*)\s*просмотр', html_content) or \
+                                        re.search(r'(\d[\d\s,.]*)\s*view', html_content)
+                            if views_match:
+                                views_str = views_match.group(1).replace(' ', '').replace(',', '')
+                                views = int(views_str)
+                        
+                        # Извлекаем дату публикации
+                        date_match = re.search(r'"publishDate":\s*"([^"]+)"', html_content)
+                        publish_date = None
+                        days_since_publication = None
+                        
+                        if date_match:
+                            publish_date_str = date_match.group(1)
+                            try:
+                                publish_date = datetime.strptime(publish_date_str.split('T')[0], "%Y-%m-%d")
+                                days_since_publication = (datetime.now() - publish_date).days
+                            except Exception as date_error:
+                                logger.warning(f"Ошибка при парсинге даты публикации: {date_error}")
+                        
+                        result = {
+                            "URL": url,
+                            "Заголовок": title,
+                            "Дней с публикации": days_since_publication,
+                            "Просмотры": views,
+                            "Ошибка": None
+                        }
+                        
+                    except Exception as regex_error:
+                        logger.error(f"Ошибка при извлечении данных через регулярные выражения: {regex_error}")
+                        result = {
+                            "URL": url,
+                            "Заголовок": "Ошибка при извлечении данных",
+                            "Дней с публикации": None,
+                            "Просмотры": None,
+                            "Ошибка": str(extract_error)
+                        }
                 
                 results.append(result)
                 
@@ -2586,7 +2786,10 @@ class YouTubeAnalyzer:
         # Форматируем данные для читаемости
         try:
             if not df.empty:
-                # Округляем количество просмотров для удобного отображения
+                # Сохраняем оригинальные данные перед форматированием
+                df["Просмотры_число"] = df["Просмотры"]
+                
+                # Форматируем количество просмотров для удобного отображения
                 df["Просмотры"] = df["Просмотры"].apply(
                     lambda x: f"{x:,}".replace(",", " ") if pd.notna(x) else "—"
                 )
@@ -2601,7 +2804,7 @@ class YouTubeAnalyzer:
         logger.info(f"Тестирование параметров видео завершено. Проанализировано {len(results)} видео.")
         
         return df
-        
+
     def render_video_tester_interface(self) -> str:
         """
         Создает HTML-разметку для веб-интерфейса тестирования параметров видео.
