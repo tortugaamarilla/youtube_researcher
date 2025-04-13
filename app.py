@@ -175,23 +175,26 @@ def get_video_data(url: str, _youtube_analyzer: YouTubeAnalyzer, max_retries: in
             "channel_name": "Недоступно"
         }
     
+    # Очищаем URL от параметров
+    clean_url = clean_youtube_url(url)
+    
     # Проверяем кэш
-    if cached_data and url in cached_data:
-        logger.info(f"Использование кэшированных данных для {url}")
-        return cached_data[url]
+    if cached_data and clean_url in cached_data:
+        logger.info(f"Использование кэшированных данных для {clean_url}")
+        return cached_data[clean_url]
     
     # Получаем данные с повторными попытками через быстрый метод
     for attempt in range(max_retries):
         try:
-            logger.info(f"Попытка {attempt+1}/{max_retries} получения данных видео: {url}")
+            logger.info(f"Попытка {attempt+1}/{max_retries} получения данных видео: {clean_url}")
             
             # Используем быстрый метод вместо Selenium
-            df = _youtube_analyzer.test_video_parameters_fast([url])
+            df = _youtube_analyzer.test_video_parameters_fast([clean_url])
             
             if not df.empty:
                 # Преобразуем результаты в словарь
                 video_data = {
-                    "url": url,
+                    "url": clean_url,  # Используем очищенный URL
                     "title": df.iloc[0]["Заголовок"],
                     "views": df.iloc[0]["Просмотры_число"] if "Просмотры_число" in df.columns else int(df.iloc[0]["Просмотры"].replace(" ", "")),
                     "publication_date": datetime.now() - timedelta(days=int(df.iloc[0]["Дней с публикации"])) if df.iloc[0]["Дней с публикации"] != "—" else datetime.now(),
@@ -199,32 +202,32 @@ def get_video_data(url: str, _youtube_analyzer: YouTubeAnalyzer, max_retries: in
                     "channel_name": "YouTube" # Примечание: быстрый метод не извлекает имя канала
                 }
                 
-                logger.info(f"Успешно получены данные для {url}")
+                logger.info(f"Успешно получены данные для {clean_url}")
                 return video_data
             else:
-                logger.warning(f"Попытка {attempt+1}: Не удалось получить полные данные для {url}")
+                logger.warning(f"Попытка {attempt+1}: Не удалось получить полные данные для {clean_url}")
                 time.sleep(1)  # Короткая пауза перед повторной попыткой
         
         except Exception as e:
-            logger.error(f"Ошибка при получении данных для {url} (попытка {attempt+1}): {e}")
+            logger.error(f"Ошибка при получении данных для {clean_url} (попытка {attempt+1}): {e}")
             time.sleep(1)
     
     # Если быстрый метод не сработал, пробуем запасной вариант через Selenium
     try:
-        logger.info(f"Используем запасной вариант через Selenium для {url}")
-        video_data = _youtube_analyzer.get_video_details(url)
+        logger.info(f"Используем запасной вариант через Selenium для {clean_url}")
+        video_data = _youtube_analyzer.get_video_details(clean_url)
         
         if video_data and video_data.get("title") and video_data["title"] != "Недоступно":
-            logger.info(f"Успешно получены данные через Selenium для {url}")
+            logger.info(f"Успешно получены данные через Selenium для {clean_url}")
             return video_data
     except Exception as e:
-        logger.error(f"Ошибка при использовании запасного варианта для {url}: {e}")
+        logger.error(f"Ошибка при использовании запасного варианта для {clean_url}: {e}")
     
     # Возвращаем базовую информацию, если все попытки не удались
-    logger.warning(f"Все попытки получить данные для {url} не удались. Возвращаем базовую информацию.")
+    logger.warning(f"Все попытки получить данные для {clean_url} не удались. Возвращаем базовую информацию.")
     return {
-        "url": url,
-        "title": f"Недоступно ({url.split('/')[-1]})",
+        "url": clean_url,
+        "title": f"Недоступно ({clean_url.split('/')[-1]})",
         "views": 0,
         "publication_date": "01.01.2000",
         "channel_name": "Недоступно",
@@ -413,6 +416,13 @@ def process_source_links(links: list,
         # Обрабатываем каждую ссылку
         for i, link in enumerate(valid_links):
             try:
+                # Проверяем тип ссылки (видео или канал)
+                is_video = "youtube.com/watch" in link or "youtu.be/" in link
+                
+                # Если это видео, очищаем URL от параметров
+                if is_video:
+                    link = clean_youtube_url(link)
+                
                 # Обновляем прогресс
                 current_progress = (i / total_links)
                 progress_text = f"Обработка ссылки {i+1}/{total_links}: {link[:50]}..."
@@ -421,23 +431,35 @@ def process_source_links(links: list,
                     progress_bar.progress(current_progress, text=progress_text)
                 
                 # Если это прямая ссылка на видео
-                if "youtube.com/watch" in link or "youtu.be/" in link:
+                if is_video:
                     if msg_container:
                         msg_container.info(f"Получение рекомендаций для видео: {link}")
                         
                     # Получаем рекомендации первого уровня
                     rec1 = yt.get_recommended_videos(link, limit=20)
                     
-                    if rec1:
-                        first_level_recommendations.extend(rec1)
+                    # Очищаем URL рекомендаций
+                    clean_rec1 = []
+                    for rec in rec1:
+                        if isinstance(rec, dict) and "url" in rec:
+                            clean_url = clean_youtube_url(rec["url"])
+                            clean_rec = rec.copy()
+                            clean_rec["url"] = clean_url
+                            clean_rec1.append(clean_rec)
+                        elif isinstance(rec, str):
+                            clean_rec1.append(clean_youtube_url(rec))
+                        else:
+                            clean_rec1.append(rec)
+                    
+                    if clean_rec1:
+                        first_level_recommendations.extend(clean_rec1)
                         if msg_container:
-                            msg_container.success(f"Получено {len(rec1)} рекомендаций первого уровня")
+                            msg_container.success(f"Получено {len(clean_rec1)} рекомендаций первого уровня")
                     else:
                         if msg_container:
                             msg_container.warning(f"Не удалось получить рекомендации для видео: {link}")
-                            
-                # Иначе, это канал
                 else:
+                    # Иначе, это канал
                     if msg_container:
                         msg_container.info(f"Обработка канала: {link}")
                         
@@ -450,12 +472,28 @@ def process_source_links(links: list,
                         
                         # Получаем рекомендации для каждого видео с канала
                         for j, video_url in enumerate(videos):
-                            rec1 = yt.get_recommended_videos(video_url, limit=20)
+                            # Очищаем URL видео
+                            clean_video_url = clean_youtube_url(video_url)
                             
-                            if rec1:
-                                first_level_recommendations.extend(rec1)
+                            rec1 = yt.get_recommended_videos(clean_video_url, limit=20)
+                            
+                            # Очищаем URL рекомендаций
+                            clean_rec1 = []
+                            for rec in rec1:
+                                if isinstance(rec, dict) and "url" in rec:
+                                    clean_url = clean_youtube_url(rec["url"])
+                                    clean_rec = rec.copy()
+                                    clean_rec["url"] = clean_url
+                                    clean_rec1.append(clean_rec)
+                                elif isinstance(rec, str):
+                                    clean_rec1.append(clean_youtube_url(rec))
+                                else:
+                                    clean_rec1.append(rec)
+                            
+                            if clean_rec1:
+                                first_level_recommendations.extend(clean_rec1)
                                 if msg_container:
-                                    msg_container.success(f"Получено {len(rec1)} рекомендаций из видео {j+1}/{len(videos)}")
+                                    msg_container.success(f"Получено {len(clean_rec1)} рекомендаций из видео {j+1}/{len(videos)}")
                             else:
                                 if msg_container:
                                     msg_container.warning(f"Не удалось получить рекомендации для видео {j+1}")
@@ -496,12 +534,28 @@ def process_source_links(links: list,
                         current_progress = 0.7 + (0.3 * (j / sample_size))
                         progress_bar.progress(current_progress, text=f"Рекомендации 2-го уровня {j+1}/{sample_size}")
                     
-                    rec2 = yt.get_recommended_videos(rec_url, limit=10)
+                    # Очищаем URL рекомендации
+                    clean_rec_url = clean_youtube_url(rec_url)
                     
-                    if rec2:
-                        second_level_recommendations.extend(rec2)
+                    rec2 = yt.get_recommended_videos(clean_rec_url, limit=10)
+                    
+                    # Очищаем URL рекомендаций второго уровня
+                    clean_rec2 = []
+                    for rec in rec2:
+                        if isinstance(rec, dict) and "url" in rec:
+                            clean_url = clean_youtube_url(rec["url"])
+                            clean_rec = rec.copy()
+                            clean_rec["url"] = clean_url
+                            clean_rec2.append(clean_rec)
+                        elif isinstance(rec, str):
+                            clean_rec2.append(clean_youtube_url(rec))
+                        else:
+                            clean_rec2.append(rec)
+                    
+                    if clean_rec2:
+                        second_level_recommendations.extend(clean_rec2)
                         if msg_container:
-                            msg_container.success(f"Получено {len(rec2)} рекомендаций второго уровня из видео {j+1}/{sample_size}")
+                            msg_container.success(f"Получено {len(clean_rec2)} рекомендаций второго уровня из видео {j+1}/{sample_size}")
                     else:
                         if msg_container:
                             msg_container.warning(f"Не удалось получить рекомендации второго уровня для видео {j+1}")
@@ -1087,8 +1141,10 @@ def test_recommendations(source_links: List[str],
                         for rec_info in recommendations:
                             rec_url = rec_info.get("url")
                             if rec_url:
+                                # Очищаем URL от параметров
+                                clean_rec_url = clean_youtube_url(rec_url)
                                 recommendation_urls.append({
-                                    "url": rec_url,
+                                    "url": clean_rec_url,
                                     "source_video": video_url
                                 })
                         
@@ -1141,8 +1197,10 @@ def test_recommendations(source_links: List[str],
                     for rec_info in recommendations:
                         rec_url = rec_info.get("url")
                         if rec_url:
+                            # Очищаем URL от параметров
+                            clean_rec_url = clean_youtube_url(rec_url)
                             recommendation_urls.append({
-                                "url": rec_url,
+                                "url": clean_rec_url,
                                 "source_video": url
                             })
                     
@@ -1196,7 +1254,7 @@ def test_recommendations(source_links: List[str],
                 if not rec_data_df.empty:
                     # Преобразуем результат в формат словаря, совместимый с исходным
                     rec_data = {
-                        "url": rec_url,
+                        "url": rec_url,  # URL уже очищен на предыдущем этапе
                         "title": rec_data_df.iloc[0]["Заголовок"],
                         "views": rec_data_df.iloc[0]["Просмотры_число"] if "Просмотры_число" in rec_data_df.columns else int(rec_data_df.iloc[0]["Просмотры"].replace(" ", "")),
                         "publication_date": datetime.now() - timedelta(days=int(rec_data_df.iloc[0]["Дней с публикации"])) if rec_data_df.iloc[0]["Дней с публикации"] != "—" else datetime.now(),
@@ -1866,7 +1924,9 @@ def render_video_tester_section():
             
             for url in urls:
                 if "youtube.com/watch?v=" in url or "youtu.be/" in url:
-                    valid_urls.append(url)
+                    # Очищаем URL
+                    clean_url = clean_youtube_url(url)
+                    valid_urls.append(clean_url)
                 else:
                     invalid_urls.append(url)
             
@@ -1922,6 +1982,44 @@ def render_video_tester_section():
         
         elif start_analysis:
             st.warning("Пожалуйста, введите хотя бы одну ссылку на YouTube видео.")
+
+# После функции parse_youtube_url добавляем новую функцию
+
+def clean_youtube_url(url: str) -> str:
+    """
+    Очищает URL YouTube от параметров, оставляя только базовый URL с идентификатором видео.
+    
+    Args:
+        url (str): Исходный URL YouTube.
+        
+    Returns:
+        str: Очищенный URL YouTube в формате https://www.youtube.com/watch?v=ID_VIDEO
+    """
+    if not url or not isinstance(url, str):
+        return url
+    
+    # Проверяем, что это YouTube URL
+    if "youtube.com/watch" not in url and "youtu.be/" not in url:
+        return url
+    
+    try:
+        # Обработка коротких ссылок youtu.be
+        if "youtu.be/" in url:
+            video_id = url.split("youtu.be/")[1].split("?")[0].split("#")[0]
+            return f"https://www.youtube.com/watch?v={video_id}"
+        
+        # Обработка стандартных ссылок youtube.com/watch?v=
+        if "youtube.com/watch" in url:
+            # Находим параметр v=
+            if "v=" in url:
+                video_id = url.split("v=")[1].split("&")[0].split("#")[0]
+                return f"https://www.youtube.com/watch?v={video_id}"
+            
+        # Если не удалось обработать, возвращаем исходный URL
+        return url
+    except Exception as e:
+        logger.warning(f"Ошибка при очистке YouTube URL: {e}")
+        return url
 
 if __name__ == "__main__":
     main() 
