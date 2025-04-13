@@ -87,68 +87,105 @@ CLAUDE_MODELS = [
 ]
 
 # Функция для фильтрации видео по дате
-def filter_by_date(video: Dict[str, Any], days_limit: int) -> bool:
+def filter_by_date(df: pd.DataFrame, max_days: int) -> pd.DataFrame:
     """
-    Фильтрует видео по дате публикации.
+    Фильтрует DataFrame по дате публикации.
     
     Args:
-        video (Dict[str, Any]): Информация о видео.
-        days_limit (int): Ограничение по дням.
+        df (pd.DataFrame): DataFrame с данными о видео.
+        max_days (int): Максимальное количество дней с момента публикации.
         
     Returns:
-        bool: True, если видео опубликовано в пределах указанного количества дней, иначе False.
+        pd.DataFrame: Отфильтрованный DataFrame.
     """
-    # Если не указано ограничение по дням, пропускаем все видео
-    if days_limit <= 0:
-        return True
-        
-    pub_date = video.get("publication_date")
+    if max_days <= 0 or "Дата публикации" not in df.columns:
+        return df
     
-    # Если дата отсутствует, но все остальные данные есть,
-    # принимаем решение в зависимости от строгости фильтрации
-    if not pub_date:
-        # Если видео имеет заголовок и URL, считаем его валидным
-        return bool(video.get("title") and video.get("url"))
-        
-    # Проверяем, что дата - объект datetime
-    if not isinstance(pub_date, datetime):
-        # Если дата не в правильном формате, но видео имеет заголовок и URL,
-        # считаем его валидным
-        return bool(video.get("title") and video.get("url"))
-        
-    # Проверяем, попадает ли дата в указанный интервал
-    days_diff = (datetime.now() - pub_date).days
-    
-    return days_diff <= days_limit
+    # Преобразуем строки даты в datetime объекты и фильтруем
+    try:
+        # Проверяем формат даты, если это строка
+        if pd.api.types.is_string_dtype(df["Дата публикации"]):
+            # Преобразуем в datetime
+            df_with_date = df.copy()
+            df_with_date["temp_date"] = pd.to_datetime(df["Дата публикации"], errors="coerce")
+            
+            # Расчитываем дни с публикации
+            now = datetime.now()
+            days_since = (now - df_with_date["temp_date"]).dt.days
+            
+            # Фильтруем
+            mask = days_since <= max_days
+            return df_with_date[mask].drop(columns=["temp_date"])
+        else:
+            # Если дата уже в формате datetime
+            now = datetime.now()
+            days_since = (now - df["Дата публикации"]).dt.days
+            return df[days_since <= max_days]
+    except Exception as e:
+        logger.error(f"Ошибка при фильтрации по дате: {e}")
+        return df
 
 # Функция для фильтрации видео по просмотрам
-def filter_by_views(video: Dict[str, Any], min_views: int) -> bool:
+def filter_by_views(df: pd.DataFrame, min_views: int) -> pd.DataFrame:
     """
-    Фильтрует видео по количеству просмотров.
+    Фильтрует DataFrame по количеству просмотров.
     
     Args:
-        video (Dict[str, Any]): Информация о видео.
+        df (pd.DataFrame): DataFrame с данными о видео.
         min_views (int): Минимальное количество просмотров.
         
     Returns:
-        bool: True, если у видео достаточно просмотров, иначе False.
+        pd.DataFrame: Отфильтрованный DataFrame.
     """
-    # Если не указано минимальное количество просмотров, пропускаем все видео
-    if min_views <= 0:
-        return True
+    if min_views <= 0 or "Количество просмотров" not in df.columns:
+        return df
+    
+    try:
+        # Убедимся, что колонка с просмотрами содержит числа
+        views_col = df["Количество просмотров"].copy()
         
-    views = video.get("views", 0)
+        # Если значения уже числовые
+        if pd.api.types.is_numeric_dtype(views_col):
+            return df[views_col >= min_views]
+        
+        # Если значения строковые, пробуем преобразовать
+        # Удаляем нечисловые символы и преобразуем в числа
+        df_with_numeric_views = df.copy()
+        df_with_numeric_views["numeric_views"] = views_col.astype(str).str.replace(r'[^\d]', '', regex=True).astype(float)
+        
+        # Фильтруем по преобразованным значениям
+        mask = df_with_numeric_views["numeric_views"] >= min_views
+        return df_with_numeric_views[mask].drop(columns=["numeric_views"])
+        
+    except Exception as e:
+        logger.error(f"Ошибка при фильтрации по просмотрам: {e}")
+        return df
+
+def filter_by_search(df: pd.DataFrame, search_query: str) -> pd.DataFrame:
+    """
+    Фильтрует DataFrame по поисковому запросу в заголовке видео.
     
-    # Проверяем корректность значения просмотров
-    if not isinstance(views, (int, float)):
-        try:
-            views = int(views)
-        except (ValueError, TypeError):
-            # Если количество просмотров невозможно преобразовать в число,
-            # но видео имеет заголовок и URL, считаем его валидным
-            return bool(video.get("title") and video.get("url"))
+    Args:
+        df (pd.DataFrame): DataFrame с данными о видео.
+        search_query (str): Поисковый запрос.
+        
+    Returns:
+        pd.DataFrame: Отфильтрованный DataFrame.
+    """
+    if not search_query or search_query.strip() == "":
+        return df
     
-    return views >= min_views
+    # Преобразуем запрос к нижнему регистру для регистронезависимого поиска
+    search_query = search_query.lower()
+    
+    # Ищем в заголовке видео
+    if "Заголовок видео" in df.columns:
+        # Создаем маску для фильтрации, игнорируя регистр
+        mask = df["Заголовок видео"].str.lower().str.contains(search_query, na=False)
+        return df[mask]
+    else:
+        # Если нет колонки с заголовком, возвращаем исходный DataFrame
+        return df
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def get_video_data(url: str, _youtube_analyzer: YouTubeAnalyzer, max_retries: int = 2, cached_data: Dict = None) -> Dict:
@@ -575,8 +612,11 @@ def process_source_links(links: list,
                 msg_container.success(f"Всего получено {len(second_level_recommendations)} уникальных рекомендаций второго уровня")
         
         # Завершаем прогресс
-        if progress_bar:
-            progress_bar.progress(1.0, text="Завершено")
+        progress_bar.progress(1.0)
+        status_text.text("Обработка завершена!")
+        
+        # Финальное обновление статистики
+        update_stats(force=True)
         
         # Закрываем драйвер
         try:
@@ -1000,21 +1040,44 @@ def test_recommendations(source_links: List[str],
         all_recommendations = []
         
         # Функция для обновления статистики
-        def update_stats():
-            time_elapsed = time.time() - start_time
+        last_update_time = 0
+        update_interval = 5.0  # Увеличиваем интервал между обновлениями статистики до 5 секунд
+        last_processed_videos = 0
+        last_added_videos = 0
+        
+        def update_stats(force=False):
+            nonlocal last_update_time, last_processed_videos, last_added_videos
+            current_time = time.time()
+            
+            # Обновляем только если:
+            # 1. Прошло не менее update_interval секунд с последнего обновления
+            # 2. Или требуется принудительное обновление (force=True)
+            # 3. Или есть существенные изменения в количестве обработанных/добавленных видео
+            substantial_change = (stats['processed_videos'] - last_processed_videos >= 5) or (stats['added_videos'] - last_added_videos >= 5)
+            
+            if not (force or substantial_change or (current_time - last_update_time >= update_interval)):
+                return
+                
+            # Обновляем время последнего обновления и счетчики
+            last_update_time = current_time
+            last_processed_videos = stats['processed_videos']
+            last_added_videos = stats['added_videos']
+            
+            # Вычисляем общее время выполнения
+            time_elapsed = current_time - start_time
             stats["total_time"] = time_elapsed
             
+            # Обновляем отображение статистики
             with stats_container:
                 st.markdown(f"""
                 **Статистика обработки:**
                 - Обработано ссылок: {stats['processed_links']}/{len(valid_links)}
                 - Обработано видео: {stats['processed_videos']}
-                - Пропущено по просмотрам: {stats['skipped_views']}
-                - Пропущено по дате: {stats['skipped_date']}
                 - Добавлено видео: {stats['added_videos']}
-                - Затраченное время: {time_elapsed:.1f} сек
+                - Пропущено по критериям: {stats['skipped_views'] + stats['skipped_date']}
+                - Время выполнения: {time_elapsed:.1f} сек
                 """)
-                
+            
             # Обновляем статистику о времени выполнения
             update_timing_stats()
         
@@ -1145,7 +1208,11 @@ def test_recommendations(source_links: List[str],
                         if video_data:
                             status_text.text(f"Видео не соответствует критериям, пропускаем: {video_url}")
                     
-                    update_stats()
+                    # Временно отключаем обновление статистики для каждого видео
+                    # update_stats()
+                
+                # Обновляем статистику принудительно после обработки всех видео с канала
+                update_stats(force=True)
             else:
                 # Для прямой ссылки на видео
                 status_text.text(f"Получение деталей видео: {url}")
@@ -1203,7 +1270,8 @@ def test_recommendations(source_links: List[str],
                     if video_data:
                         status_text.text(f"Видео не соответствует критериям, пропускаем: {url}")
                 
-                update_stats()
+                # Временно отключаем обновление статистики для прямой ссылки
+                # update_stats()
         
         # Обработка собранных рекомендаций
         status_text.text(f"Обработка {len(all_recommendations)} рекомендаций...")
@@ -1291,12 +1359,14 @@ def test_recommendations(source_links: List[str],
                     if rec_data:
                         logger.info(f"Рекомендация {rec_url} не прошла фильтрацию")
                 
-                update_stats()
+                # Убираем лишнее обновление статистики для каждого видео
             
             # Фиксируем время всего пакета
             batch_time = end_timer(f"Обработка пакета рекомендаций {i+1}-{min(i+batch_size, len(filtered_recommendations))}")
             status_text.text(f"Пакет обработан за {batch_time:.2f}с")
             
+            # Обновляем статистику после обработки пакета рекомендаций
+            # Используем обновление только по завершении пакета, а не на каждой итерации
             update_stats()
         
         # Добавляем исходные видео к результатам
@@ -1308,7 +1378,7 @@ def test_recommendations(source_links: List[str],
         status_text.text("Обработка завершена!")
         
         # Финальное обновление статистики
-        update_stats()
+        update_stats(force=True)
         
     except Exception as e:
         status_text.error(f"Произошла ошибка: {e}")
@@ -1362,6 +1432,11 @@ def test_recommendations(source_links: List[str],
             
             # Удаляем дубликаты по URL видео
             df = df.drop_duplicates(subset=["Ссылка на видео"])
+            
+            # Преобразуем ссылки в активные для отображения в Streamlit
+            df["Ссылка на видео"] = df["Ссылка на видео"].apply(
+                lambda x: f'<a href="{x}" target="_blank">{x}</a>' if isinstance(x, str) else x
+            )
             
             return df
         else:
@@ -1750,7 +1825,7 @@ def main():
                 max_days_since_publication = st.number_input(
                     "Время с момента публикации (дней)", 
                     min_value=1, 
-                    max_value=365, 
+                    max_value=3650,  # Увеличено до 10 лет (3650 дней)
                     value=7
                 )
             with col4:
@@ -1784,9 +1859,9 @@ def main():
                     if not results_df.empty:
                         st.session_state["results_df"] = results_df
                         st.success(f"Собрано {len(results_df)} результатов.")
-                        # Нумерация с 1 и отображение индекса
-                        results_df_display = results_df.copy()
-                        st.dataframe(results_df_display)
+                        
+                        # Гарантируем, что таблица будет отображаться всегда
+                        display_results_tab1()
                         
                         # Автоматический переход на вкладку с результатами
                         st.info("Перейдите на вкладку 'Релевантность' для фильтрации результатов.")
@@ -1799,6 +1874,10 @@ def main():
                         st.write("- Проверьте настройки драйвера и сети")
             else:
                 st.error("Необходимо указать хотя бы одну ссылку на YouTube для сбора рекомендаций.")
+                # Проверяем наличие данных в сессии и отображаем их, если они есть
+                if "results_df" in st.session_state and not st.session_state["results_df"].empty:
+                    st.success(f"Показаны предыдущие результаты ({len(st.session_state['results_df'])} записей).")
+                    display_results_tab1()
     
     with tab2:
         # Стадия 3: Фильтрация по релевантности
@@ -1817,7 +1896,8 @@ def main():
             with col2:
                 max_days = st.number_input(
                     "Максимальное количество дней после публикации", 
-                    min_value=1, 
+                    min_value=1,
+                    max_value=3650,  # Добавлено максимальное значение 10 лет (3650 дней)
                     value=30, 
                     step=1
                 )
@@ -1848,9 +1928,8 @@ def main():
                 
                 if not df.empty:
                     st.success(f"Найдено {len(df)} результатов после фильтрации.")
-                    # Нумерация с 1 и отображение индекса
-                    df_display = df.copy()
-                    st.dataframe(df_display)
+                    # Используем функцию для отображения результатов
+                    display_results_tab2()
                     
                     # Автоматический переход на вкладку с результатами
                     st.info("Перейдите на вкладку 'Результаты' для просмотра и экспорта.")
@@ -1858,6 +1937,11 @@ def main():
                     st.warning("Не найдено результатов, соответствующих критериям фильтрации.")
             else:
                 st.error("Сначала выполните сбор рекомендаций на первой вкладке.")
+        
+        # Проверяем наличие отфильтрованных данных и отображаем их
+        elif "filtered_df" in st.session_state and not st.session_state["filtered_df"].empty:
+            st.success(f"Показаны предыдущие результаты фильтрации ({len(st.session_state['filtered_df'])} записей).")
+            display_results_tab2()
     
     with tab3:
         # Отображение результатов
@@ -1866,62 +1950,8 @@ def main():
         if ("filtered_df" in st.session_state and not st.session_state["filtered_df"].empty) or \
            ("results_df" in st.session_state and not st.session_state["results_df"].empty):
             
-            # Используем отфильтрованные результаты, если они есть, иначе - все результаты
-            if "filtered_df" in st.session_state and not st.session_state["filtered_df"].empty:
-                display_df = st.session_state["filtered_df"].copy()
-            else:
-                display_df = st.session_state["results_df"].copy()
-            
-            # Отображаем результаты
-            # Нумерация с 1 и отображение индекса
-            display_df = display_df.reset_index(drop=True)
-            display_df.index = range(1, len(display_df) + 1)
-            st.dataframe(display_df)
-            
-            # Экспорт результатов
-            with st.expander("Экспорт результатов", expanded=True):
-                col1, col2 = st.columns(2)
-                
-                with col1:
-                    export_format = st.selectbox(
-                        "Формат экспорта",
-                        options=["CSV", "Excel", "JSON"],
-                        index=0
-                    )
-                
-                with col2:
-                    filename = st.text_input("Имя файла (без расширения)", value="youtube_results")
-                
-                if st.button("Экспорт данных"):
-                    try:
-                        with st.spinner("Экспорт данных..."):
-                            # Экспорт в CSV
-                            if export_format == "CSV":
-                                csv = display_df.to_csv(index=False)
-                                b64 = base64.b64encode(csv.encode()).decode()
-                                href = f'<a href="data:file/csv;base64,{b64}" download="{filename}.csv">📊 Скачать CSV файл</a>'
-                                st.markdown(href, unsafe_allow_html=True)
-                            
-                            # Экспорт в Excel
-                            elif export_format == "Excel":
-                                output = BytesIO()
-                                with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-                                    display_df.to_excel(writer, sheet_name='Results', index=False)
-                                
-                                b64 = base64.b64encode(output.getvalue()).decode()
-                                href = f'<a href="data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,{b64}" download="{filename}.xlsx">📊 Скачать Excel файл</a>'
-                                st.markdown(href, unsafe_allow_html=True)
-                            
-                            # Экспорт в JSON
-                            elif export_format == "JSON":
-                                json_str = display_df.to_json(orient='records')
-                                b64 = base64.b64encode(json_str.encode()).decode()
-                                href = f'<a href="data:file/json;base64,{b64}" download="{filename}.json">📊 Скачать JSON файл</a>'
-                                st.markdown(href, unsafe_allow_html=True)
-                            
-                            st.success(f"Экспорт в {export_format} успешно выполнен!")
-                    except Exception as e:
-                        st.error(f"Ошибка при экспорте данных: {str(e)}")
+            # Используем функцию для отображения результатов
+            display_results_tab3()
         else:
             st.warning("Нет данных для отображения. Сначала соберите рекомендации на первой вкладке.")
     
@@ -2075,6 +2105,73 @@ def clean_youtube_url(url: str) -> str:
     except Exception as e:
         logger.warning(f"Ошибка при очистке YouTube URL: {e}")
         return url
+
+# Добавляем новую функцию для отображения результатов на вкладке 1
+def display_results_tab1():
+    """
+    Функция для отображения таблицы с результатами и прямой ссылки на CSV на вкладке "Получение рекомендаций".
+    """
+    if "results_df" in st.session_state and not st.session_state["results_df"].empty:
+        # Нумерация с 1 и отображение индекса с поддержкой HTML
+        results_df_display = st.session_state["results_df"].copy()
+        st.write(results_df_display.to_html(escape=False), unsafe_allow_html=True)
+        
+        # Сразу создаем ссылку для скачивания без кнопки
+        export_df = st.session_state["results_df"].copy()
+        if "Ссылка на видео" in export_df.columns:
+            export_df["Ссылка на видео"] = export_df["Ссылка на видео"].str.replace(r'<a href="(.+?)".*?>.*?</a>', r'\1', regex=True)
+        
+        csv = export_df.to_csv(index=False)
+        b64 = base64.b64encode(csv.encode()).decode()
+        href = f'<div style="text-align: right; margin: 10px 0;"><a href="data:file/csv;base64,{b64}" download="youtube_results.csv" style="background-color: #4CAF50; color: white; padding: 8px 16px; text-decoration: none; border-radius: 4px;">📊 Скачать CSV файл</a></div>'
+        st.markdown(href, unsafe_allow_html=True)
+
+# Добавляем функцию для отображения результатов на вкладке "Релевантность"
+def display_results_tab2():
+    """
+    Функция для отображения таблицы с отфильтрованными результатами на вкладке "Релевантность".
+    """
+    if "filtered_df" in st.session_state and not st.session_state["filtered_df"].empty:
+        # Нумерация с 1 и отображение индекса с поддержкой HTML
+        df_display = st.session_state["filtered_df"].copy()
+        st.write(df_display.to_html(escape=False), unsafe_allow_html=True)
+        
+        # Сразу создаем ссылку для скачивания без кнопки
+        export_df = st.session_state["filtered_df"].copy()
+        if "Ссылка на видео" in export_df.columns:
+            export_df["Ссылка на видео"] = export_df["Ссылка на видео"].str.replace(r'<a href="(.+?)".*?>.*?</a>', r'\1', regex=True)
+        
+        csv = export_df.to_csv(index=False)
+        b64 = base64.b64encode(csv.encode()).decode()
+        href = f'<div style="text-align: right; margin: 10px 0;"><a href="data:file/csv;base64,{b64}" download="youtube_filtered_results.csv" style="background-color: #4CAF50; color: white; padding: 8px 16px; text-decoration: none; border-radius: 4px;">📊 Скачать CSV файл</a></div>'
+        st.markdown(href, unsafe_allow_html=True)
+
+# Добавляем функцию для отображения результатов на вкладке "Результаты"
+def display_results_tab3():
+    """
+    Функция для отображения таблицы с результатами на вкладке "Результаты".
+    """
+    # Используем отфильтрованные результаты, если они есть, иначе - все результаты
+    if "filtered_df" in st.session_state and not st.session_state["filtered_df"].empty:
+        display_df = st.session_state["filtered_df"].copy()
+    else:
+        display_df = st.session_state["results_df"].copy()
+    
+    # Отображаем результаты
+    # Нумерация с 1 и отображение индекса с поддержкой HTML
+    display_df = display_df.reset_index(drop=True)
+    display_df.index = range(1, len(display_df) + 1)
+    st.write(display_df.to_html(escape=False), unsafe_allow_html=True)
+    
+    # Сразу создаем ссылку для скачивания без кнопки
+    export_df = display_df.copy()
+    if "Ссылка на видео" in export_df.columns:
+        export_df["Ссылка на видео"] = export_df["Ссылка на видео"].str.replace(r'<a href="(.+?)".*?>.*?</a>', r'\1', regex=True)
+    
+    csv = export_df.to_csv(index=False)
+    b64 = base64.b64encode(csv.encode()).decode()
+    href = f'<div style="text-align: right; margin: 10px 0;"><a href="data:file/csv;base64,{b64}" download="youtube_final_results.csv" style="background-color: #4CAF50; color: white; padding: 8px 16px; text-decoration: none; border-radius: 4px;">📊 Скачать CSV файл</a></div>'
+    st.markdown(href, unsafe_allow_html=True)
 
 if __name__ == "__main__":
     main() 
