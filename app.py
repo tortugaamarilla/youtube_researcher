@@ -909,9 +909,6 @@ def test_recommendations(source_links: List[str],
     status_text = st.empty()
     stats_container = st.container()
     
-    # Контейнер для отображения подробной информации о времени выполнения операций
-    timing_container = st.expander("Детальная информация о времени выполнения", expanded=True)
-    
     # Статистика для отслеживания производительности
     stats = {
         "processed_links": 0,
@@ -961,26 +958,7 @@ def test_recommendations(source_links: List[str],
     
     # Функция для вывода статистики о времени выполнения
     def update_timing_stats():
-        # Расчет средних значений
-        avg_recommendations = stats["time_get_recommendations"] / max(1, stats["count_get_recommendations"])
-        avg_video_data = stats["time_get_video_data"] / max(1, stats["count_get_video_data"])
-        
-        # Вывод статистики
-        with timing_container:
-            st.markdown(f"""
-            ### Время выполнения операций:
-            - Общее время: **{stats['total_time']:.2f}** сек
-            - Получение рекомендаций (Selenium): 
-              * Всего: **{stats['time_get_recommendations']:.2f}** сек
-              * Среднее: **{avg_recommendations:.2f}** сек/запрос ({stats['count_get_recommendations']} запросов)
-            - Получение данных о видео (HTTP-запросы): 
-              * Всего: **{stats['time_get_video_data']:.2f}** сек
-              * Среднее: **{avg_video_data:.2f}** сек/запрос ({stats['count_get_video_data']} запросов)
-            
-            #### Последние 5 операций:
-            - Получение рекомендаций: {[f"{t:.2f}с" for t in timers["recommendation_times"][-5:]]}
-            - Получение данных о видео: {[f"{t:.2f}с" for t in timers["video_data_times"][-5:]]}
-            """)
+        pass
     
     start_time = time.time()
     
@@ -1076,7 +1054,7 @@ def test_recommendations(source_links: List[str],
             # Обновляем прогресс
             progress_value = float(i) / len(valid_links)
             progress_bar.progress(progress_value)
-            status_text.text(f"Обрабатываем ссылку {i+1} из {len(valid_links)}: {link}")
+            status_text.text(f"Обрабатываем ссылку {i+1}/{len(valid_links)}: {link}")
             stats["processed_links"] += 1
             
             # Проверяем тип ссылки (канал или видео)
@@ -1301,6 +1279,9 @@ def test_recommendations(source_links: List[str],
     if results:
         # Формируем датафрейм с нужными колонками
         df = pd.DataFrame(results)
+        
+        # Добавляем нумерацию, начинающуюся с 1
+        df.index = range(1, len(df) + 1)
         
         # Выбираем и переименовываем нужные колонки
         columns_to_show = {
@@ -1742,7 +1723,9 @@ def main():
                     if not results_df.empty:
                         st.session_state["results_df"] = results_df
                         st.success(f"Собрано {len(results_df)} результатов.")
-                        st.dataframe(results_df)
+                        # Нумерация с 1 и отображение индекса
+                        results_df_display = results_df.copy()
+                        st.dataframe(results_df_display)
                         
                         # Автоматический переход на вкладку с результатами
                         st.info("Перейдите на вкладку 'Релевантность' для фильтрации результатов.")
@@ -1804,7 +1787,9 @@ def main():
                 
                 if not df.empty:
                     st.success(f"Найдено {len(df)} результатов после фильтрации.")
-                    st.dataframe(df)
+                    # Нумерация с 1 и отображение индекса
+                    df_display = df.copy()
+                    st.dataframe(df_display)
                     
                     # Автоматический переход на вкладку с результатами
                     st.info("Перейдите на вкладку 'Результаты' для просмотра и экспорта.")
@@ -1827,6 +1812,9 @@ def main():
                 display_df = st.session_state["results_df"].copy()
             
             # Отображаем результаты
+            # Нумерация с 1 и отображение индекса
+            display_df = display_df.reset_index(drop=True)
+            display_df.index = range(1, len(display_df) + 1)
             st.dataframe(display_df)
             
             # Экспорт результатов
@@ -1968,8 +1956,14 @@ def render_video_tester_section():
                             sorting_df = results_df.sort_values(by="Просмотры_число", ascending=False)
                             # Удаляем служебный столбец перед отображением
                             sorting_df = sorting_df.drop("Просмотры_число", axis=1)
+                            # Нумерация с 1 и отображение индекса
+                            sorting_df = sorting_df.reset_index(drop=True)
+                            sorting_df.index = range(1, len(sorting_df) + 1)
                             st.dataframe(sorting_df)
                         else:
+                            # Нумерация с 1 и отображение индекса
+                            results_df = results_df.reset_index(drop=True)
+                            results_df.index = range(1, len(results_df) + 1)
                             st.dataframe(results_df)
                     else:
                         st.warning("Не удалось получить данные о видео.")
