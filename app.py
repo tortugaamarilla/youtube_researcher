@@ -1077,7 +1077,8 @@ def test_recommendations(source_links: List[str],
                         # Получаем рекомендации для этого видео
                         status_text.text(f"Получение рекомендаций для видео: {video_url}")
                         start_timer(f"Получение рекомендаций для видео: {video_url}")
-                        recommendations = youtube_analyzer.get_recommended_videos(video_url, limit=recommendations_per_video)
+                        # Используем быстрый метод вместо обычного
+                        recommendations = youtube_analyzer.get_recommended_videos_fast(video_url, limit=recommendations_per_video)
                         rec_time = end_timer(f"Получение рекомендаций для видео: {video_url}")
                         status_text.text(f"Получены рекомендации за {rec_time:.2f}с")
                         
@@ -1130,7 +1131,8 @@ def test_recommendations(source_links: List[str],
                     # Получаем рекомендации для видео
                     status_text.text(f"Получение рекомендаций для видео: {url}")
                     start_timer(f"Получение рекомендаций для видео: {url}")
-                    recommendations = youtube_analyzer.get_recommended_videos(url, limit=recommendations_per_video)
+                    # Используем быстрый метод вместо обычного
+                    recommendations = youtube_analyzer.get_recommended_videos_fast(url, limit=recommendations_per_video)
                     rec_time = end_timer(f"Получение рекомендаций для видео: {url}")
                     status_text.text(f"Получены рекомендации за {rec_time:.2f}с")
                     

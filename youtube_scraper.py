@@ -3012,6 +3012,170 @@ class YouTubeAnalyzer:
         """
         return html
 
+    def get_recommended_videos_fast(self, video_url: str, limit: int = 20) -> List[Dict[str, Any]]:
+        """
+        Быстрый метод получения рекомендованных видео через HTTP-запросы без использования Selenium.
+        
+        Args:
+            video_url (str): URL видео.
+            limit (int): Максимальное количество рекомендованных видео для получения.
+            
+        Returns:
+            List[Dict[str, Any]]: Список рекомендованных видео.
+        """
+        recommendations = []
+        start_time = time.time()
+        logger.info(f"Быстрое получение рекомендаций для видео: {video_url}")
+        
+        try:
+            # Извлекаем ID видео из URL
+            video_id = None
+            if "youtube.com/watch?v=" in video_url:
+                video_id = video_url.split("watch?v=")[1].split("&")[0]
+            elif "youtu.be/" in video_url:
+                video_id = video_url.split("youtu.be/")[1].split("?")[0]
+            
+            if not video_id:
+                logger.warning(f"Не удалось извлечь ID видео из URL: {video_url}")
+                return []
+                
+            # Формируем URL для запроса
+            request_url = f"https://www.youtube.com/watch?v={video_id}"
+            
+            # Создаем headers для запроса
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7"
+            }
+            
+            # Используем прокси, если настроен
+            proxies = None
+            if self.use_proxy and self.current_proxy:
+                proxies = {
+                    "http": self.current_proxy["http"],
+                    "https": self.current_proxy["https"]
+                }
+            
+            # Делаем запрос к странице видео
+            logger.info(f"Отправка HTTP-запроса для получения страницы видео: {request_url}")
+            response = requests.get(request_url, headers=headers, proxies=proxies, timeout=10)
+            request_time = time.time() - start_time
+            logger.info(f"Получен ответ за {request_time:.2f} сек, код: {response.status_code}")
+            
+            if response.status_code != 200:
+                logger.warning(f"Ошибка при запросе страницы видео: {response.status_code}")
+                return []
+                
+            # Получаем HTML-контент страницы
+            html_content = response.text
+            
+            # Извлекаем рекомендации из HTML: два подхода
+            # 1. Через регулярные выражения для поиска ссылок на видео
+            video_urls = set()  # Используем множество для избежания дубликатов
+            
+            # Поиск ссылок на видео через регулярные выражения
+            logger.info("Извлечение рекомендаций из HTML с помощью регулярных выражений")
+            regex_start_time = time.time()
+            
+            # Ищем все URL видео в HTML
+            url_patterns = [
+                r'href=\"(/watch\?v=[^\"&]+)',  # Ссылки на видео в стандартном формате
+                r'videoId\":\"([a-zA-Z0-9_-]{11})\"',  # ID видео в JSON-данных
+                r'watchEndpoint\":{\"videoId\":\"([a-zA-Z0-9_-]{11})\"'  # ID видео в данных рекомендаций
+            ]
+            
+            for pattern in url_patterns:
+                matches = re.findall(pattern, html_content)
+                for match in matches:
+                    if len(match) == 11 and not match.startswith('/'):  # Прямой ID видео
+                        full_url = f"https://www.youtube.com/watch?v={match}"
+                        video_urls.add(full_url)
+                    elif match.startswith('/watch?v='):  # Относительный URL
+                        full_url = f"https://www.youtube.com{match}"
+                        video_urls.add(full_url)
+            
+            # 2. Через JSON-данные, встроенные в страницу
+            try:
+                # Ищем ytInitialData, содержащий информацию о рекомендациях
+                json_start_time = time.time()
+                json_data_match = re.search(r'ytInitialData\s*=\s*({.+?});</script>', html_content)
+                
+                if json_data_match:
+                    data = json.loads(json_data_match.group(1))
+                    
+                    # Извлекаем рекомендации из секции secondary results (справа от видео)
+                    secondary_results = None
+                    try:
+                        secondary_results = data.get('contents', {}).get('twoColumnWatchNextResults', {}).get('secondaryResults', {})
+                        if 'secondaryResults' in secondary_results:
+                            secondary_results = secondary_results.get('secondaryResults', {})
+                    except (KeyError, TypeError, AttributeError):
+                        pass
+                        
+                    # Извлекаем данные рекомендаций
+                    if secondary_results and 'results' in secondary_results:
+                        results = secondary_results.get('results', [])
+                        for result in results:
+                            try:
+                                # Проверяем разные форматы компонентов рекомендаций
+                                if 'compactVideoRenderer' in result:
+                                    video_id = result['compactVideoRenderer'].get('videoId')
+                                    if video_id:
+                                        title = None
+                                        title_runs = result['compactVideoRenderer'].get('title', {}).get('runs', [])
+                                        if title_runs:
+                                            title = ''.join(run.get('text', '') for run in title_runs)
+                                            
+                                        full_url = f"https://www.youtube.com/watch?v={video_id}"
+                                        if title:
+                                            video_urls.add(full_url)
+                                            recommendations.append({"url": full_url, "title": title})
+                                        else:
+                                            video_urls.add(full_url)
+                            except Exception as item_error:
+                                logger.warning(f"Ошибка при обработке элемента рекомендации: {item_error}")
+                                continue
+                    
+                    json_time = time.time() - json_start_time
+                    logger.info(f"Извлечение рекомендаций из JSON заняло {json_time:.2f} сек")
+            except Exception as json_error:
+                logger.warning(f"Ошибка при извлечении рекомендаций из JSON: {json_error}")
+            
+            # Для всех URL из регулярных выражений, которых нет в recommendations, добавляем их
+            for url in video_urls:
+                # Пропускаем текущее видео
+                if url == video_url:
+                    continue
+                    
+                # Пропускаем плейлисты и прямые эфиры
+                if "list=" in url or "live" in url or "&t=" in url:
+                    continue
+                    
+                # Проверяем, есть ли уже этот URL в рекомендациях
+                if not any(rec.get("url") == url for rec in recommendations):
+                    recommendations.append({"url": url})
+            
+            # Удаляем дубликаты, сохраняя порядок
+            unique_recommendations = []
+            seen_urls = set()
+            for rec in recommendations:
+                if rec["url"] not in seen_urls:
+                    seen_urls.add(rec["url"])
+                    unique_recommendations.append(rec)
+            
+            recommendations = unique_recommendations[:limit]
+            
+            total_time = time.time() - start_time
+            logger.info(f"Быстрое получение рекомендаций заняло {total_time:.2f} сек, найдено {len(recommendations)} рекомендаций")
+            
+            return recommendations
+            
+        except Exception as e:
+            total_time = time.time() - start_time
+            logger.error(f"Ошибка при быстром получении рекомендаций для {video_url}: {e} (за {total_time:.2f} сек)")
+            traceback.print_exc()
+            return []
+
 def check_proxy(proxy_string: str) -> Tuple[bool, str]:
     """
     Проверяет работоспособность прокси-сервера
