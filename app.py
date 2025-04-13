@@ -14,6 +14,7 @@ import base64
 import json
 import hashlib
 import uuid
+from io import BytesIO
 
 from youtube_scraper import YouTubeAnalyzer, check_proxy
 from llm_analyzer import LLMAnalyzer
@@ -1265,7 +1266,7 @@ def main():
                                     proxy_list = []
         
     # Основное содержимое
-    tab1, tab2, tab3 = st.tabs(["Получение рекомендаций", "Релевантность", "Результаты"])
+    tab1, tab2, tab3, tab4 = st.tabs(["Получение рекомендаций", "Релевантность", "Результаты", "Тестирование параметров"])
     
     with tab1:
         # Стадия 1: Авторизация Google и настройка предварительного просмотра
@@ -1656,1308 +1657,140 @@ def main():
             
             # Используем отфильтрованные результаты, если они есть, иначе - все результаты
             if "filtered_df" in st.session_state and not st.session_state["filtered_df"].empty:
-                display_df = st.session_state["filtered_df"]
-                st.success(f"Отображаются отфильтрованные результаты: {len(display_df)} видео.")
+                display_df = st.session_state["filtered_df"].copy()
             else:
-                display_df = st.session_state["results_df"]
-                st.success(f"Отображаются все результаты: {len(display_df)} видео.")
+                display_df = st.session_state["results_df"].copy()
             
-            # Выбор формата отображения
-            display_format = st.radio(
-                "Формат отображения:",
-                options=["Таблица", "JSON", "Карточки"],
-                index=0
-            )
-            
-            if display_format == "Таблица":
-                st.dataframe(display_df)
-            elif display_format == "JSON":
-                st.json(display_df.to_dict(orient="records"))
-            else:  # Карточки
-                # Отображаем результаты в виде карточек
-                for i, row in display_df.iterrows():
-                    with st.expander(f"{row['Заголовок видео'] if 'Заголовок видео' in row else 'Видео ' + str(i+1)}", expanded=False):
-                        col1, col2 = st.columns([1, 2])
-                        
-                        with col1:
-                            # Если есть миниатюра, отображаем ее
-                            if "thumbnail" in row:
-                                st.image(row["thumbnail"], use_column_width=True)
-                            
-                        with col2:
-                            # Выводим детали видео
-                            st.write(f"**Ссылка:** [{row['Ссылка на видео'] if 'Ссылка на видео' in row else ''}]({row['Ссылка на видео'] if 'Ссылка на видео' in row else ''})")
-                            
-                            if "Дата публикации" in row:
-                                st.write(f"**Дата публикации:** {row['Дата публикации']}")
-                            
-                            if "Количество просмотров" in row:
-                                st.write(f"**Просмотры:** {row['Количество просмотров']}")
-                            
-                            if "Источник видео" in row:
-                                st.write(f"**Источник:** {row['Источник видео']}")
+            # Отображаем результаты
+            st.dataframe(display_df)
             
             # Экспорт результатов
-            st.subheader("Экспорт результатов")
-            
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                if st.button("Скачать CSV"):
-                    csv = display_df.to_csv(index=False)
-                    
-                    # Кодируем CSV в base64
-                    b64 = base64.b64encode(csv.encode()).decode()
-                    
-                    # Формируем ссылку для скачивания
-                    href = f'<a href="data:file/csv;base64,{b64}" download="youtube_results.csv">Скачать CSV файл</a>'
-                    st.markdown(href, unsafe_allow_html=True)
-            
-            with col2:
-                if st.button("Скачать JSON"):
-                    json_data = display_df.to_json(orient="records", force_ascii=False)
-                    
-                    # Кодируем JSON в base64
-                    b64 = base64.b64encode(json_data.encode("utf-8")).decode()
-                    
-                    # Формируем ссылку для скачивания
-                    href = f'<a href="data:file/json;base64,{b64}" download="youtube_results.json">Скачать JSON файл</a>'
-                    st.markdown(href, unsafe_allow_html=True)
+            with st.expander("Экспорт результатов", expanded=True):
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    export_format = st.selectbox(
+                        "Формат экспорта",
+                        options=["CSV", "Excel", "JSON"],
+                        index=0
+                    )
+                
+                with col2:
+                    filename = st.text_input("Имя файла (без расширения)", value="youtube_results")
+                
+                if st.button("Экспорт данных"):
+                    try:
+                        with st.spinner("Экспорт данных..."):
+                            # Экспорт в CSV
+                            if export_format == "CSV":
+                                csv = display_df.to_csv(index=False)
+                                b64 = base64.b64encode(csv.encode()).decode()
+                                href = f'<a href="data:file/csv;base64,{b64}" download="{filename}.csv">📊 Скачать CSV файл</a>'
+                                st.markdown(href, unsafe_allow_html=True)
+                            
+                            # Экспорт в Excel
+                            elif export_format == "Excel":
+                                output = BytesIO()
+                                with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+                                    display_df.to_excel(writer, sheet_name='Results', index=False)
+                                
+                                b64 = base64.b64encode(output.getvalue()).decode()
+                                href = f'<a href="data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,{b64}" download="{filename}.xlsx">📊 Скачать Excel файл</a>'
+                                st.markdown(href, unsafe_allow_html=True)
+                            
+                            # Экспорт в JSON
+                            elif export_format == "JSON":
+                                json_str = display_df.to_json(orient='records')
+                                b64 = base64.b64encode(json_str.encode()).decode()
+                                href = f'<a href="data:file/json;base64,{b64}" download="{filename}.json">📊 Скачать JSON файл</a>'
+                                st.markdown(href, unsafe_allow_html=True)
+                            
+                            st.success(f"Экспорт в {export_format} успешно выполнен!")
+                    except Exception as e:
+                        st.error(f"Ошибка при экспорте данных: {str(e)}")
         else:
-            st.warning("Нет данных для отображения. Пожалуйста, соберите рекомендации на первой вкладке.")
+            st.warning("Нет данных для отображения. Сначала соберите рекомендации на первой вкладке.")
+    
+    with tab4:
+        # Раздел для тестирования параметров видео
+        render_video_tester_section()
 
-# Добавляем функцию для создания HTML файла с ручным просмотром
-def create_manual_viewing_html(video_urls: List[str], min_watch_time: int = 15, max_watch_time: int = 45) -> str:
+# Функция для отображения раздела тестирования параметров видео
+def render_video_tester_section():
     """
-    Создает HTML файл для ручного просмотра видео YouTube.
+    Отображает раздел тестирования параметров видео в Streamlit приложении.
+    """
+    st.markdown("## Тестирование алгоритма сбора параметров видео")
     
-    Args:
-        video_urls: Список URL видео для просмотра
-        min_watch_time: Минимальное время просмотра каждого видео в секундах
-        max_watch_time: Максимальное время просмотра каждого видео в секундах
+    # Создаем разворачивающуюся секцию
+    with st.expander("Развернуть раздел тестирования", expanded=False):
+        st.markdown("""
+        Этот инструмент позволяет проверить работу алгоритма сбора данных YouTube видео.
+        Введите ссылки на видео (по одной в строке) и запустите анализ, чтобы увидеть:
+        - Количество дней с момента публикации
+        - Количество просмотров
+        """)
         
-    Returns:
-        str: HTML содержимое файла
-    """
-    # Очистка и валидация ссылок
-    valid_urls = []
-    for url in video_urls:
-        url = url.strip()
-        # Проверяем, является ли это ссылкой на видео
-        if "youtube.com/watch" in url or "youtu.be/" in url:
-            valid_urls.append(url)
-            logger.info(f"Добавлена прямая ссылка на видео: {url}")
-        # Если это канал, пытаемся получить видео с него
-        elif "youtube.com/channel/" in url or "youtube.com/c/" in url or "youtube.com/user/" in url or "youtube.com/@" in url:
-            # Сначала преобразуем ссылку на канал в ссылку на страницу видео канала
-            channel_videos_url = url
-            if not channel_videos_url.endswith("/videos"):
-                channel_videos_url = channel_videos_url.rstrip("/") + "/videos"
+        # Поле для ввода ссылок на видео
+        video_urls = st.text_area(
+            "Ссылки на YouTube видео (по одной в строке):",
+            height=150,
+            placeholder="https://www.youtube.com/watch?v=..."
+        )
+        
+        # Кнопка для запуска анализа
+        start_analysis = st.button("Проанализировать видео")
+        
+        # Обработка нажатия кнопки
+        if start_analysis and video_urls:
+            # Разбиваем текст на строки и фильтруем пустые
+            urls = [url.strip() for url in video_urls.strip().split('\n') if url.strip()]
             
-            # Добавляем ссылку на страницу видео канала
-            valid_urls.append(channel_videos_url)
-            logger.info(f"Добавлена ссылка на страницу видео канала: {channel_videos_url}")
+            if not urls:
+                st.error("Пожалуйста, введите хотя бы одну ссылку на YouTube видео.")
+                return
             
-            try:
-                # Создаем временный анализатор YouTube без авторизации
-                temp_analyzer = YouTubeAnalyzer(headless=True, use_proxy=False)
+            # Проверяем формат URL
+            invalid_urls = []
+            valid_urls = []
+            
+            for url in urls:
+                if "youtube.com/watch?v=" in url or "youtu.be/" in url:
+                    valid_urls.append(url)
+                else:
+                    invalid_urls.append(url)
+            
+            if invalid_urls:
+                st.error(f"Следующие URL имеют неверный формат:\n" + "\n".join(invalid_urls))
+                return
+            
+            # Запускаем анализ с индикатором прогресса
+            with st.spinner("Анализ видео..."):
                 try:
-                    # Получаем последние 5 видео с канала
-                    channel_videos = temp_analyzer.get_last_videos_from_channel(url, limit=5)
+                    # Инициализируем YouTube анализатор
+                    analyzer = YouTubeAnalyzer(headless=True, use_proxy=False)
                     
-                    if channel_videos:
-                        for video in channel_videos:
-                            if isinstance(video, dict) and 'url' in video:
-                                valid_urls.append(video['url'])
-                                logger.info(f"Добавлено видео с канала: {video['url']}")
-                            elif isinstance(video, str):
-                                valid_urls.append(video)
-                                logger.info(f"Добавлено видео с канала: {video}")
-                        
-                        # Логируем информацию
-                        logger.info(f"Получено {len(channel_videos)} видео с канала {url}")
-                finally:
+                    # Получаем и обрабатываем результаты
+                    results_df = analyzer.test_video_parameters(valid_urls)
+                    
                     # Закрываем драйвер
-                    if temp_analyzer and hasattr(temp_analyzer, 'driver') and temp_analyzer.driver:
-                        temp_analyzer.quit_driver()
-            except Exception as e:
-                logger.error(f"Ошибка при получении видео с канала {url}: {str(e)}")
-        else:
-            logger.warning(f"Пропущена некорректная ссылка: {url} - не распознана как видео или канал YouTube")
-    
-    # Удаляем дубликаты
-    valid_urls = list(dict.fromkeys(valid_urls))
-    
-    # Проверка на наличие валидных ссылок
-    if not valid_urls:
-        # Возвращаем HTML с предупреждением, если нет ссылок
-        return """
-        <!DOCTYPE html>
-        <html lang="ru">
-        <head>
-            <meta charset="UTF-8">
-            <meta name="viewport" content="width=device-width, initial-scale=1.0">
-            <title>Ошибка - Нет валидных видео</title>
-            <style>
-                body { font-family: Arial; background: #f0f0f0; padding: 20px; }
-                .container { max-width: 800px; margin: 0 auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 0 10px rgba(0, 0, 0, 0.1); }
-                h1 { color: #cc0000; text-align: center; }
-                .error { background-color: #fff3cd; color: #856404; padding: 15px; border-radius: 5px; margin: 20px 0; border-left: 5px solid #ffeeba; }
-                .info { background-color: #d1ecf1; color: #0c5460; padding: 15px; border-radius: 5px; margin: 20px 0; border-left: 5px solid #bee5eb; }
-                .manual-step { background-color: #e8f5e9; color: #1b5e20; padding: 15px; border-radius: 5px; margin: 20px 0; border-left: 5px solid #a5d6a7; }
-                .input-section { background-color: #f5f5f5; padding: 15px; border-radius: 5px; margin-top: 20px; }
-                textarea { width: 100%; height: 100px; padding: 10px; margin-bottom: 10px; border: 1px solid #ddd; border-radius: 4px; }
-                button { background-color: #cc0000; color: white; border: none; padding: 10px 15px; border-radius: 4px; cursor: pointer; font-weight: bold; }
-                button:hover { background-color: #aa0000; }
-            </style>
-        </head>
-        <body>
-            <div class="container">
-                <h1>Ошибка: Нет валидных видео</h1>
-                <div class="error">
-                    <strong>Не найдено видео для просмотра.</strong> Пожалуйста, добавьте корректные ссылки на видео YouTube.
-                </div>
-                <div class="info">
-                    <p><strong>Допустимые форматы ссылок:</strong></p>
-                    <ul>
-                        <li>Прямые ссылки на видео: https://www.youtube.com/watch?v=XXXXXXXXXXX</li>
-                        <li>Короткие ссылки: https://youtu.be/XXXXXXXXXXX</li>
-                    </ul>
-                    <p>Из-за ограничений YouTube API, автоматическое получение видео с каналов недоступно. 
-                    Пожалуйста, используйте прямые ссылки на конкретные видео.</p>
-                </div>
+                    analyzer.quit_driver()
+                    
+                    # Отображаем результаты
+                    if not results_df.empty:
+                        st.success(f"Анализ завершен! Проанализировано {len(results_df)} видео.")
+                        st.dataframe(results_df)
+                    else:
+                        st.warning("Не удалось получить данные о видео.")
                 
-                <div class="manual-step">
-                    <h3>Как найти ссылки на видео вручную:</h3>
-                    <ol>
-                        <li>Откройте YouTube и найдите интересующий вас канал или видео</li>
-                        <li>Для канала: перейдите во вкладку "Видео"</li>
-                        <li>Нажмите на видео, которое хотите добавить</li>
-                        <li>Скопируйте URL из адресной строки браузера</li>
-                        <li>Вставьте скопированные ссылки в текстовое поле ниже (по одной ссылке на строку)</li>
-                    </ol>
-                </div>
-                
-                <div class="input-section">
-                    <h3>Добавьте ссылки на YouTube видео:</h3>
-                    <form id="videoForm">
-                        <textarea id="videoUrls" placeholder="Вставьте ссылки на YouTube видео (по одной ссылке на строку)"></textarea>
-                        <button type="button" onclick="createWatchPage()">Создать страницу просмотра</button>
-                    </form>
-                </div>
-            </div>
-            
-            <script>
-                function createWatchPage() {
-                    const urlsText = document.getElementById('videoUrls').value;
-                    const urlsList = urlsText.split('\\n').filter(url => url.trim() !== '');
-                    
-                    if (urlsList.length === 0) {
-                        alert('Пожалуйста, добавьте хотя бы одну ссылку на видео YouTube');
-                        return;
-                    }
-                    
-                    // Проверяем форматы ссылок
-                    const validUrls = urlsList.filter(url => 
-                        url.includes('youtube.com/watch') || 
-                        url.includes('youtu.be/')
-                    );
-                    
-                    if (validUrls.length === 0) {
-                        alert('Не найдено валидных ссылок на видео YouTube. Пожалуйста, проверьте формат ссылок.');
-                        return;
-                    }
-                    
-                    // Создаем массив с данными о видео
-                    const videos = validUrls.map(url => {
-                        const watchTime = Math.floor(Math.random() * (45 - 15 + 1)) + 15;
-                        return { url, watchTime };
-                    });
-                    
-                    // Создаем HTML для списка видео
-                    let videosListHtml = '';
-                    videos.forEach((video, i) => {
-                        videosListHtml += `
-                        <tr id="video-row-${i}" class="video-row">
-                            <td>${i+1}</td>
-                            <td><a href="${video.url}" target="_blank">${video.url}</a></td>
-                            <td>${video.watchTime} сек</td>
-                            <td class="status">Ожидает</td>
-                        </tr>
-                        `;
-                    });
-                    
-                    // Создаем HTML страницу для просмотра
-                    const htmlContent = `
-                    <!DOCTYPE html>
-                    <html lang="ru">
-                    <head>
-                        <meta charset="UTF-8">
-                        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-                        <title>Просмотр видео YouTube для обучения</title>
-                        <style>
-                            body {
-                                font-family: Arial, sans-serif;
-                                line-height: 1.6;
-                                margin: 0;
-                                padding: 20px;
-                                background-color: #f0f0f0;
-                            }
-                            
-                            .container {
-                                max-width: 1000px;
-                                margin: 0 auto;
-                                background: white;
-                                padding: 20px;
-                                border-radius: 8px;
-                                box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
-                            }
-                            
-                            h1 {
-                                color: #cc0000;
-                                text-align: center;
-                            }
-                            
-                            .warning {
-                                background-color: #fff3cd;
-                                color: #856404;
-                                padding: 10px;
-                                border-radius: 5px;
-                                margin-bottom: 20px;
-                                border-left: 5px solid #ffeeba;
-                            }
-                            
-                            .info {
-                                background-color: #d1ecf1;
-                                color: #0c5460;
-                                padding: 10px;
-                                border-radius: 5px;
-                                margin-bottom: 20px;
-                                border-left: 5px solid #bee5eb;
-                            }
-                            
-                            .player-wrapper {
-                                display: flex;
-                                flex-direction: column;
-                                margin-bottom: 20px;
-                                background: #000;
-                                padding: 10px;
-                                border-radius: 5px;
-                            }
-                            
-                            #player {
-                                width: 100%;
-                                height: 500px;
-                                margin-bottom: 10px;
-                            }
-                            
-                            .controls {
-                                display: flex;
-                                justify-content: space-between;
-                                align-items: center;
-                                background: #333;
-                                color: white;
-                                padding: 10px;
-                                border-radius: 5px;
-                            }
-                            
-                            .progress {
-                                flex-grow: 1;
-                                margin: 0 15px;
-                                height: 20px;
-                                background: #444;
-                                border-radius: 10px;
-                                overflow: hidden;
-                                position: relative;
-                            }
-                            
-                            .progress-bar {
-                                height: 100%;
-                                width: 0;
-                                background: #cc0000;
-                                transition: width 0.5s;
-                            }
-                            
-                            .time-display {
-                                font-family: monospace;
-                                font-size: 16px;
-                                margin-right: 10px;
-                            }
-                            
-                            button {
-                                background-color: #cc0000;
-                                color: white;
-                                border: none;
-                                padding: 10px 15px;
-                                cursor: pointer;
-                                border-radius: 4px;
-                                font-weight: bold;
-                            }
-                            
-                            button:hover {
-                                background-color: #aa0000;
-                            }
-                            
-                            button:disabled {
-                                background-color: #cccccc;
-                                cursor: not-allowed;
-                            }
-                            
-                            table {
-                                width: 100%;
-                                border-collapse: collapse;
-                                margin-top: 20px;
-                            }
-                            
-                            th, td {
-                                padding: 12px;
-                                text-align: left;
-                                border-bottom: 1px solid #ddd;
-                            }
-                            
-                            th {
-                                background-color: #f2f2f2;
-                                font-weight: bold;
-                            }
-                            
-                            tr.completed {
-                                background-color: #e8f5e9;
-                            }
-                            
-                            tr.playing {
-                                background-color: #fff8e1;
-                            }
-                            
-                            td.status {
-                                font-weight: bold;
-                            }
-                            
-                            .status-playing {
-                                color: #ff9800;
-                            }
-                            
-                            .status-completed {
-                                color: #4caf50;
-                            }
-                            
-                            .video-info {
-                                background: #f5f5f5;
-                                padding: 10px;
-                                border-radius: 5px;
-                                margin-top: 10px;
-                                font-weight: bold;
-                            }
-                        </style>
-                    </head>
-                    <body>
-                        <div class="container">
-                            <h1>Просмотр видео YouTube</h1>
-                            
-                            <div class="warning">
-                                <strong>Важно:</strong> Перед началом просмотра убедитесь, что вы авторизованы в YouTube в текущем браузере.
-                                Не закрывайте эту страницу до завершения просмотра всех видео.
-                            </div>
-                            
-                            <div class="info">
-                                <p><strong>Этот инструмент поможет вам:</strong></p>
-                                <ul>
-                                    <li>Автоматически просмотреть список видео YouTube</li>
-                                    <li>Добавить видео в историю просмотров вашего аккаунта</li>
-                                    <li>Улучшить рекомендации YouTube на основе ваших просмотров</li>
-                                </ul>
-                            </div>
-                            
-                            <div class="player-wrapper">
-                                <div id="player"></div>
-                                <div class="controls">
-                                    <button id="startButton">▶️ Начать просмотр</button>
-                                    <div class="progress">
-                                        <div class="progress-bar" id="progressBar"></div>
-                                    </div>
-                                    <div class="time-display" id="timeDisplay">00:00 / 00:00</div>
-                                    <button id="skipButton" disabled>⏩ Пропустить</button>
-                                </div>
-                            </div>
-                            
-                            <div class="video-info" id="videoInfo">
-                                Нажмите кнопку "Начать просмотр" для просмотра ${videos.length} видео
-                            </div>
-                            
-                            <table>
-                                <thead>
-                                    <tr>
-                                        <th>№</th>
-                                        <th>Ссылка на видео</th>
-                                        <th>Время просмотра</th>
-                                        <th>Статус</th>
-                                    </tr>
-                                </thead>
-                                <tbody id="videosTable">
-                                    ${videosListHtml}
-                                </tbody>
-                            </table>
-                        </div>
-                        
-                        <script>
-                            // Загружаем YouTube API
-                            var tag = document.createElement('script');
-                            tag.src = "https://www.youtube.com/iframe_api";
-                            var firstScriptTag = document.getElementsByTagName('script')[0];
-                            firstScriptTag.parentNode.insertBefore(tag, firstScriptTag);
-                            
-                            // Данные о видео
-                            const videos = [
-                                {videos_json}
-                            ];
-                            
-                            // Проверка наличия видео
-                            if (videos.length === 0) {{
-                                document.getElementById('videoInfo').textContent = "Не найдено видео для просмотра";
-                                document.getElementById('startButton').disabled = true;
-                                alert("Не найдено ни одного видео для просмотра. Добавьте корректные YouTube-ссылки.");
-                            }}
-                            
-                            // Получение элементов
-                            const startButton = document.getElementById('startButton');
-                            const skipButton = document.getElementById('skipButton');
-                            const progressBar = document.getElementById('progressBar');
-                            const timeDisplay = document.getElementById('timeDisplay');
-                            const videoInfo = document.getElementById('videoInfo');
-                            const videosTable = document.getElementById('videosTable');
-                            
-                            // Переменные состояния
-                            let currentVideoIndex = 0;
-                            let watching = false;
-                            let timer = null;
-                            let secondsWatched = 0;
-                            let totalWatched = 0;
-                            let player;
-                            
-                            // Получение ID видео из URL YouTube
-                            function getYouTubeVideoId(url) {{
-                                const regExp = /^.*((youtu.be\\/)|(v\\/)|(\\/u\\/\\w\\/)|(embed\\/)|(watch\\?))\\??v?=?([^#&?]*).*/;
-                                const match = url.match(regExp);
-                                return (match && match[7].length === 11) ? match[7] : false;
-                            }}
-                            
-                            // Инициализация YouTube плеера
-                            function onYouTubeIframeAPIReady() {{
-                                player = new YT.Player('player', {{
-                                    height: '500',
-                                    width: '100%',
-                                    videoId: '',
-                                    playerVars: {{
-                                        'autoplay': 0,
-                                        'controls': 1,
-                                        'showinfo': 1,
-                                        'rel': 0,
-                                        'fs': 1,
-                                        'modestbranding': 1
-                                    }},
-                                    events: {{
-                                        'onStateChange': onPlayerStateChange
-                                    }}
-                                }});
-                            }}
-                            
-                            // Обработка состояний плеера
-                            function onPlayerStateChange(event) {{
-                                // Если видео закончилось само
-                                if (event.data === YT.PlayerState.ENDED) {{
-                                    // Ведем себя как при достижении времени просмотра
-                                    clearInterval(timer);
-                                    updateVideoStatus(currentVideoIndex, 'Завершено');
-                                    currentVideoIndex++;
-                                    setTimeout(playCurrentVideo, 1500);
-                                }}
-                            }}
-                            
-                            // Форматирование времени (секунды в MM:SS)
-                            function formatTime(seconds) {{
-                                const mins = Math.floor(seconds / 60);
-                                const secs = Math.floor(seconds % 60);
-                                return `${{String(mins).padStart(2, '0')}}:${{String(secs).padStart(2, '0')}}`;
-                            }}
-                            
-                            // Обновление прогресса видео
-                            function updateProgress() {{
-                                const currentVideo = videos[currentVideoIndex];
-                                const percent = (secondsWatched / currentVideo.watchTime) * 100;
-                                progressBar.style.width = `${{percent}}%`;
-                                
-                                timeDisplay.textContent = `${{formatTime(secondsWatched)}} / ${{formatTime(currentVideo.watchTime)}}`;
-                            }}
-                            
-                            // Обновление статуса видео в таблице
-                            function updateVideoStatus(index, status) {{
-                                const row = document.getElementById(`video-row-${{index}}`);
-                                const statusCell = row.querySelector('.status');
-                                
-                                if (status === 'Просмотр') {{
-                                    row.className = 'video-row playing';
-                                    statusCell.className = 'status status-playing';
-                                    statusCell.textContent = 'Просмотр';
-                                }} else if (status === 'Завершено') {{
-                                    row.className = 'video-row completed';
-                                    statusCell.className = 'status status-completed';
-                                    statusCell.textContent = 'Завершено';
-                                    totalWatched++;
-                                }}
-                            }}
-                            
-                            // Загрузка и воспроизведение текущего видео
-                            function playCurrentVideo() {{
-                                // Проверка на завершение всех видео
-                                if (currentVideoIndex >= videos.length) {{
-                                    stopWatching();
-                                    videoInfo.textContent = `Просмотр завершен! Просмотрено ${{totalWatched}} из ${{videos.length}} видео.`;
-                                    alert('Просмотр всех видео завершен!');
-                                    return;
-                                }}
-                                
-                                const currentVideo = videos[currentVideoIndex];
-                                const videoId = getYouTubeVideoId(currentVideo.url);
-                                
-                                if (!videoId) {{
-                                    console.error('Не удалось получить ID видео для:', currentVideo.url);
-                                    currentVideoIndex++;
-                                    playCurrentVideo();
-                                    return;
-                                }}
-                                
-                                // Обновляем информацию
-                                videoInfo.textContent = `Просмотр видео ${{currentVideoIndex + 1}} из ${{videos.length}}: ${{currentVideo.url}}`;
-                                
-                                // Обновляем статус
-                                updateVideoStatus(currentVideoIndex, 'Просмотр');
-                                
-                                // Сбрасываем счетчик
-                                secondsWatched = 0;
-                                updateProgress();
-                                
-                                // Загружаем и запускаем видео с помощью API
-                                if (player && player.loadVideoById) {{
-                                    // Загружаем видео и запускаем его
-                                    player.loadVideoById({{
-                                        'videoId': videoId,
-                                        'startSeconds': 0,
-                                        'suggestedQuality': 'large'
-                                    }});
-                                    player.playVideo();
-                                    
-                                    // Устанавливаем громкость на среднее значение
-                                    setTimeout(function() {{
-                                        player.setVolume(50);
-                                        // Дополнительно пробуем запустить воспроизведение через 1 секунду
-                                        player.playVideo();
-                                    }}, 1000);
-                                }}
-                                
-                                // Запускаем таймер
-                                if (timer) {{
-                                    clearInterval(timer);
-                                }}
-                                
-                                timer = setInterval(() => {{
-                                    secondsWatched++;
-                                    updateProgress();
-                                    
-                                    // Если достигнуто нужное время просмотра
-                                    if (secondsWatched >= currentVideo.watchTime) {{
-                                        // Отмечаем как просмотренное
-                                        updateVideoStatus(currentVideoIndex, 'Завершено');
-                                        
-                                        // Переходим к следующему
-                                        currentVideoIndex++;
-                                        
-                                        // Останавливаем таймер
-                                        clearInterval(timer);
-                                        
-                                        // Небольшая пауза перед следующим видео
-                                        setTimeout(playCurrentVideo, 1500);
-                                    }}
-                                }}, 1000);
-                                
-                                // Открываем видео в новой вкладке для надежности
-                                if (secondsWatched === 0) {{
-                                    // При первом запуске просмотра для каждого видео открываем его в новой вкладке
-                                    // для гарантированного добавления в историю просмотров
-                                    const newTab = window.open(currentVideo.url, '_blank');
-                                    
-                                    // Показываем инструкцию пользователю
-                                    videoInfo.innerHTML = '<div class="warning">' +
-                                        '<strong style="color: #ff9800;">⚠️ Внимание!</strong> Открыта новая вкладка с видео ' + (currentVideoIndex + 1) + '/' + videos.length + '.<br>' +
-                                        'Пожалуйста, перейдите в открытую вкладку и запустите воспроизведение кликом.<br>' +
-                                        'Эта вкладка не закроется автоматически. Закройте её вручную после начала воспроизведения.<br>' +
-                                        '<span style="color: #4caf50;">✓ Видео будет считаться просмотренным в любом случае через ' + currentVideo.watchTime + ' секунд.</span>' +
-                                        '</div>';
-                                    
-                                    // Не закрываем вкладку автоматически, поскольку это может помешать воспроизведению
-                                    // Пользователь должен будет сам закрыть вкладку после начала воспроизведения
-                                }}
-                                
-                                // Включаем кнопку пропуска
-                                skipButton.disabled = false;
-                            }}
-                            
-                            // Остановка просмотра
-                            function stopWatching() {{
-                                if (timer) {{
-                                    clearInterval(timer);
-                                    timer = null;
-                                }}
-                                
-                                if (player && player.pauseVideo) {{
-                                    player.pauseVideo();
-                                }}
-                                
-                                watching = false;
-                                startButton.textContent = '▶️ Продолжить просмотр';
-                                skipButton.disabled = true;
-                            }}
-                            
-                            // Обработчики событий
-                            startButton.addEventListener('click', () => {{
-                                if (watching) {{
-                                    stopWatching();
-                                }} else {{
-                                    watching = true;
-                                    startButton.textContent = '⏸️ Пауза';
-                                    playCurrentVideo();
-                                }}
-                            }});
-                            
-                            skipButton.addEventListener('click', () => {{
-                                if (watching) {{
-                                    clearInterval(timer);
-                                    
-                                    // Отмечаем текущее видео как просмотренное
-                                    updateVideoStatus(currentVideoIndex, 'Завершено');
-                                    
-                                    // Переходим к следующему
-                                    currentVideoIndex++;
-                                    
-                                    // Воспроизводим следующее
-                                    playCurrentVideo();
-                                }}
-                            }});
-                            
-                            // Предупреждение при попытке закрыть страницу
-                            window.addEventListener('beforeunload', (e) => {{
-                                if (watching) {{
-                                    e.preventDefault();
-                                    e.returnValue = 'Просмотр видео не завершен. Закрытие страницы прервет процесс просмотра.';
-                                    return e.returnValue;
-                                }}
-                            }});
-                        </script>
-                    </body>
-                    </html>
-                    `;
-                    
-                    // Создаем и скачиваем файл
-                    const blob = new Blob([htmlContent], { type: 'text/html' });
-                    const url = URL.createObjectURL(blob);
-                    const a = document.createElement('a');
-                    a.href = url;
-                    a.download = 'youtube_videos_to_watch.html';
-                    a.click();
-                    URL.revokeObjectURL(url);
-                }
-            </script>
-        </body>
-        </html>
-        """
-    
-    # Генерируем случайное время просмотра для каждого видео
-    watch_times = []
-    for _ in range(len(valid_urls)):
-        watch_time = random.randint(min_watch_time, max_watch_time)
-        watch_times.append(watch_time)
-    
-    # Создаем HTML с упрощенным интерфейсом
-    videos_list_html = ""
-    for i, (url, time) in enumerate(zip(valid_urls, watch_times)):
-        videos_list_html += f"""
-        <tr id="video-row-{i}" class="video-row">
-            <td>{i+1}</td>
-            <td><a href="{url}" target="_blank">{url}</a></td>
-            <td>{time} сек</td>
-            <td class="status">Ожидает</td>
-        </tr>
-        """
-    
-    # Подготавливаем JavaScript массив данных о видео
-    videos_json_items = []
-    for url, time in zip(valid_urls, watch_times):
-        # Заменяем двойные кавычки на экранированные
-        safe_url = url.replace('"', '\\"')
-        videos_json_items.append(f'{{ url: "{safe_url}", watchTime: {time} }}')
-    
-    videos_json = ",\n                ".join(videos_json_items)
-    
-    html_content = f"""
-    <!DOCTYPE html>
-    <html lang="ru">
-    <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Просмотр видео YouTube для обучения</title>
-        <style>
-            body {{
-                font-family: Arial, sans-serif;
-                line-height: 1.6;
-                margin: 0;
-                padding: 20px;
-                background-color: #f0f0f0;
-            }}
-            
-            .container {{
-                max-width: 1000px;
-                margin: 0 auto;
-                background: white;
-                padding: 20px;
-                border-radius: 8px;
-                box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
-            }}
-            
-            h1 {{
-                color: #cc0000;
-                text-align: center;
-            }}
-            
-            .warning {{
-                background-color: #fff3cd;
-                color: #856404;
-                padding: 10px;
-                border-radius: 5px;
-                margin-bottom: 20px;
-                border-left: 5px solid #ffeeba;
-            }}
-            
-            .info {{
-                background-color: #d1ecf1;
-                color: #0c5460;
-                padding: 10px;
-                border-radius: 5px;
-                margin-bottom: 20px;
-                border-left: 5px solid #bee5eb;
-            }}
-            
-            .success {{
-                background-color: #d4edda;
-                color: #155724;
-                padding: 10px;
-                border-radius: 5px;
-                margin-bottom: 20px;
-                border-left: 5px solid #c3e6cb;
-            }}
-            
-            .manual-mode {{
-                background-color: #ffe0b2;
-                color: #e65100;
-                padding: 15px;
-                border-radius: 5px;
-                margin: 20px 0;
-                border-left: 5px solid #ffb74d;
-            }}
-            
-            .player-wrapper {{
-                display: flex;
-                flex-direction: column;
-                margin-bottom: 20px;
-                background: #000;
-                padding: 10px;
-                border-radius: 5px;
-            }}
-            
-            #player {{
-                width: 100%;
-                height: 500px;
-                margin-bottom: 10px;
-            }}
-            
-            .controls {{
-                display: flex;
-                justify-content: space-between;
-                align-items: center;
-                background: #333;
-                color: white;
-                padding: 10px;
-                border-radius: 5px;
-            }}
-            
-            .progress {{
-                flex-grow: 1;
-                margin: 0 15px;
-                height: 20px;
-                background: #444;
-                border-radius: 10px;
-                overflow: hidden;
-                position: relative;
-            }}
-            
-            .progress-bar {{
-                height: 100%;
-                width: 0;
-                background: #cc0000;
-                transition: width 0.5s;
-            }}
-            
-            .time-display {{
-                font-family: monospace;
-                font-size: 16px;
-                margin-right: 10px;
-            }}
-            
-            button {{
-                background-color: #cc0000;
-                color: white;
-                border: none;
-                padding: 10px 15px;
-                cursor: pointer;
-                border-radius: 4px;
-                font-weight: bold;
-            }}
-            
-            button:hover {{
-                background-color: #aa0000;
-            }}
-            
-            button:disabled {{
-                background-color: #cccccc;
-                cursor: not-allowed;
-            }}
-            
-            .button-alt {{
-                background-color: #4CAF50;
-                margin-left: 10px;
-            }}
-            
-            .button-alt:hover {{
-                background-color: #388E3C;
-            }}
-            
-            table {{
-                width: 100%;
-                border-collapse: collapse;
-                margin-top: 20px;
-            }}
-            
-            th, td {{
-                padding: 12px;
-                text-align: left;
-                border-bottom: 1px solid #ddd;
-            }}
-            
-            th {{
-                background-color: #f2f2f2;
-                font-weight: bold;
-            }}
-            
-            tr.completed {{
-                background-color: #e8f5e9;
-            }}
-            
-            tr.playing {{
-                background-color: #fff8e1;
-            }}
-            
-            td.status {{
-                font-weight: bold;
-            }}
-            
-            .status-playing {{
-                color: #ff9800;
-            }}
-            
-            .status-completed {{
-                color: #4caf50;
-            }}
-            
-            .video-info {{
-                background: #f5f5f5;
-                padding: 10px;
-                border-radius: 5px;
-                margin-top: 10px;
-                font-weight: bold;
-            }}
-            
-            .action-cell {{
-                text-align: center;
-            }}
-            
-            .open-button {{
-                background-color: #2196F3;
-                color: white;
-                border: none;
-                padding: 5px 10px;
-                border-radius: 3px;
-                cursor: pointer;
-                font-size: 12px;
-            }}
-            
-            .open-button:hover {{
-                background-color: #0b7dda;
-            }}
-        </style>
-    </head>
-    <body>
-        <div class="container">
-            <h1>Просмотр видео YouTube</h1>
-            
-            <div class="warning">
-                <strong>Важно:</strong> Перед началом просмотра убедитесь, что вы авторизованы в YouTube в текущем браузере.
-                Не закрывайте эту страницу до завершения просмотра всех видео.
-            </div>
-            
-            <div class="info">
-                <p><strong>Этот инструмент поможет вам:</strong></p>
-                <ul>
-                    <li>Автоматически просмотреть список видео YouTube</li>
-                    <li>Добавить видео в историю просмотров вашего аккаунта</li>
-                    <li>Улучшить рекомендации YouTube на основе ваших просмотров</li>
-                </ul>
-            </div>
-            
-            <div class="manual-mode">
-                <h3>🔄 Инструкция по использованию:</h3>
-                <ol>
-                    <li>Нажмите кнопку "Начать просмотр" для запуска процесса</li>
-                    <li>Для каждого видео будет открыта новая вкладка</li>
-                    <li>Перейдите в открытую вкладку и вручную запустите воспроизведение видео</li>
-                    <li>После начала воспроизведения, вы можете закрыть вкладку и вернуться на эту страницу</li>
-                    <li>Процесс продолжится автоматически и перейдет к следующему видео через указанное время</li>
-                    <li>Вы также можете нажать кнопку "Пропустить" чтобы сразу перейти к следующему видео</li>
-                </ol>
-                <p>⚠️ <strong>Примечание:</strong> Современные браузеры блокируют автоматическое воспроизведение, поэтому требуется ручной запуск каждого видео.</p>
-            </div>
-            
-            <div class="player-wrapper">
-                <div id="player"></div>
-                <div class="controls">
-                    <button id="startButton">▶️ Начать просмотр</button>
-                    <div class="progress">
-                        <div class="progress-bar" id="progressBar"></div>
-                    </div>
-                    <div class="time-display" id="timeDisplay">00:00 / 00:00</div>
-                    <button id="skipButton" disabled>⏩ Пропустить</button>
-                    <button id="manualButton" class="button-alt" disabled>🔗 Открыть текущее видео</button>
-                </div>
-            </div>
-            
-            <div class="video-info" id="videoInfo">
-                Нажмите кнопку "Начать просмотр" для просмотра {len(valid_urls)} видео
-            </div>
-            
-            <table>
-                <thead>
-                    <tr>
-                        <th>№</th>
-                        <th>Ссылка на видео</th>
-                        <th>Время просмотра</th>
-                        <th>Статус</th>
-                        <th>Действие</th>
-                    </tr>
-                </thead>
-                <tbody id="videosTable">
-                    {videos_list_html.replace('</tr>', '<td class="action-cell"><button class="open-button" onclick="openVideoLink(this)">Открыть</button></td></tr>')}
-                </tbody>
-            </table>
-        </div>
+                except Exception as e:
+                    st.error(f"Произошла ошибка при анализе видео: {str(e)}")
+                    # Отображаем более подробную информацию в expander
+                    with st.expander("Подробности ошибки"):
+                        st.exception(e)
         
-        <script>
-            // Загружаем YouTube API
-            var tag = document.createElement('script');
-            tag.src = "https://www.youtube.com/iframe_api";
-            var firstScriptTag = document.getElementsByTagName('script')[0];
-            firstScriptTag.parentNode.insertBefore(tag, firstScriptTag);
-            
-            // Данные о видео
-            const videos = [
-                {videos_json}
-            ];
-            
-            // Проверка наличия видео
-            if (videos.length === 0) {{
-                document.getElementById('videoInfo').textContent = "Не найдено видео для просмотра";
-                document.getElementById('startButton').disabled = true;
-                alert("Не найдено ни одного видео для просмотра. Добавьте корректные YouTube-ссылки.");
-            }}
-            
-            // Получение элементов
-            const startButton = document.getElementById('startButton');
-            const skipButton = document.getElementById('skipButton');
-            const manualButton = document.getElementById('manualButton');
-            const progressBar = document.getElementById('progressBar');
-            const timeDisplay = document.getElementById('timeDisplay');
-            const videoInfo = document.getElementById('videoInfo');
-            const videosTable = document.getElementById('videosTable');
-            
-            // Переменные состояния
-            let currentVideoIndex = 0;
-            let watching = false;
-            let timer = null;
-            let secondsWatched = 0;
-            let totalWatched = 0;
-            let player;
-            
-            // Открытие видео в новой вкладке из таблицы
-            function openVideoLink(buttonElement) {{
-                const row = buttonElement.closest('tr');
-                const rowIndex = parseInt(row.id.replace('video-row-', ''));
-                const video = videos[rowIndex];
-                
-                // Открываем видео в новой вкладке
-                window.open(video.url, '_blank');
-                
-                // Отмечаем ячейку другим цветом чтобы показать, что ссылка была открыта
-                buttonElement.style.backgroundColor = '#4CAF50';
-                buttonElement.textContent = 'Открыто';
-            }}
-            
-            // Получение ID видео из URL YouTube
-            function getYouTubeVideoId(url) {{
-                const regExp = /^.*((youtu.be\\/)|(v\\/)|(\\/u\\/\\w\\/)|(embed\\/)|(watch\\?))\\??v?=?([^#&?]*).*/;
-                const match = url.match(regExp);
-                return (match && match[7].length === 11) ? match[7] : false;
-            }}
-            
-            // Инициализация YouTube плеера
-            function onYouTubeIframeAPIReady() {{
-                player = new YT.Player('player', {{
-                    height: '500',
-                    width: '100%',
-                    videoId: '',
-                    playerVars: {{
-                        'autoplay': 0,
-                        'controls': 1,
-                        'showinfo': 1,
-                        'rel': 0,
-                        'fs': 1,
-                        'modestbranding': 1
-                    }},
-                    events: {{
-                        'onStateChange': onPlayerStateChange
-                    }}
-                }});
-            }}
-            
-            // Обработка состояний плеера
-            function onPlayerStateChange(event) {{
-                // Если видео закончилось само
-                if (event.data === YT.PlayerState.ENDED) {{
-                    // Ведем себя как при достижении времени просмотра
-                    clearInterval(timer);
-                    updateVideoStatus(currentVideoIndex, 'Завершено');
-                    currentVideoIndex++;
-                    setTimeout(playCurrentVideo, 1500);
-                }}
-            }}
-            
-            // Форматирование времени (секунды в MM:SS)
-            function formatTime(seconds) {{
-                const mins = Math.floor(seconds / 60);
-                const secs = Math.floor(seconds % 60);
-                return `${{String(mins).padStart(2, '0')}}:${{String(secs).padStart(2, '0')}}`;
-            }}
-            
-            // Обновление прогресса видео
-            function updateProgress() {{
-                if (currentVideoIndex >= videos.length) return;
-                
-                const currentVideo = videos[currentVideoIndex];
-                const percent = (secondsWatched / currentVideo.watchTime) * 100;
-                progressBar.style.width = `${{percent}}%`;
-                
-                timeDisplay.textContent = `${{formatTime(secondsWatched)}} / ${{formatTime(currentVideo.watchTime)}}`;
-            }}
-            
-            // Обновление статуса видео в таблице
-            function updateVideoStatus(index, status) {{
-                const row = document.getElementById(`video-row-${{index}}`);
-                if (!row) return;
-                
-                const statusCell = row.querySelector('.status');
-                
-                if (status === 'Просмотр') {{
-                    row.className = 'video-row playing';
-                    statusCell.className = 'status status-playing';
-                    statusCell.textContent = 'Просмотр';
-                }} else if (status === 'Завершено') {{
-                    row.className = 'video-row completed';
-                    statusCell.className = 'status status-completed';
-                    statusCell.textContent = 'Завершено';
-                    totalWatched++;
-                }}
-            }}
-            
-            // Загрузка и воспроизведение текущего видео
-            function playCurrentVideo() {{
-                // Проверка на завершение всех видео
-                if (currentVideoIndex >= videos.length) {{
-                    stopWatching();
-                    videoInfo.innerHTML = `
-                        <div class="success">
-                            <strong>✅ Просмотр завершен!</strong> Просмотрено ${{totalWatched}} из ${{videos.length}} видео.<br>
-                            Теперь все эти видео должны отображаться в вашей истории просмотров YouTube.
-                        </div>
-                    `;
-                    alert('Просмотр всех видео завершен!');
-                    return;
-                }}
-                
-                const currentVideo = videos[currentVideoIndex];
-                const videoId = getYouTubeVideoId(currentVideo.url);
-                
-                if (!videoId) {{
-                    console.error('Не удалось получить ID видео для:', currentVideo.url);
-                    currentVideoIndex++;
-                    playCurrentVideo();
-                    return;
-                }}
-                
-                // Обновляем информацию
-                videoInfo.innerHTML = `
-                    <strong>Просмотр видео ${{currentVideoIndex + 1}} из ${{videos.length}}:</strong><br>
-                    <a href="${{currentVideo.url}}" target="_blank">${{currentVideo.url}}</a><br>
-                    <span style="color: #4caf50;">Нажмите на кнопку "Открыть текущее видео" и запустите воспроизведение вручную.</span>
-                `;
-                
-                // Обновляем статус
-                updateVideoStatus(currentVideoIndex, 'Просмотр');
-                
-                // Сбрасываем счетчик
-                secondsWatched = 0;
-                updateProgress();
-                
-                // Загружаем и запускаем видео с помощью API
-                if (player && player.loadVideoById) {{
-                    // Загружаем видео и запускаем его
-                    player.loadVideoById({{
-                        'videoId': videoId,
-                        'startSeconds': 0,
-                        'suggestedQuality': 'large'
-                    }});
-                    player.playVideo();
-                    
-                    // Устанавливаем громкость на среднее значение
-                    setTimeout(function() {{
-                        player.setVolume(50);
-                        // Дополнительно пробуем запустить воспроизведение через 1 секунду
-                        player.playVideo();
-                    }}, 1000);
-                }}
-                
-                // Запускаем таймер
-                if (timer) {{
-                    clearInterval(timer);
-                }}
-                
-                timer = setInterval(() => {{
-                    secondsWatched++;
-                    updateProgress();
-                    
-                    // Если достигнуто нужное время просмотра
-                    if (secondsWatched >= currentVideo.watchTime) {{
-                        // Отмечаем как просмотренное
-                        updateVideoStatus(currentVideoIndex, 'Завершено');
-                        
-                        // Переходим к следующему
-                        currentVideoIndex++;
-                        
-                        // Останавливаем таймер
-                        clearInterval(timer);
-                        
-                        // Небольшая пауза перед следующим видео
-                        setTimeout(playCurrentVideo, 1500);
-                    }}
-                }}, 1000);
-                
-                // Открываем видео в новой вкладке для надежности
-                if (secondsWatched === 0) {{
-                    // При первом запуске просмотра для каждого видео открываем его в новой вкладке
-                    // для гарантированного добавления в историю просмотров
-                    const newTab = window.open(currentVideo.url, '_blank');
-                    
-                    // Показываем инструкцию пользователю
-                    videoInfo.innerHTML = '<div class="warning">' +
-                        '<strong style="color: #ff9800;">⚠️ Внимание!</strong> Открыта новая вкладка с видео ' + (currentVideoIndex + 1) + '/' + videos.length + '.<br>' +
-                        'Пожалуйста, перейдите в открытую вкладку и запустите воспроизведение кликом.<br>' +
-                        'Эта вкладка не закроется автоматически. Закройте её вручную после начала воспроизведения.<br>' +
-                        '<span style="color: #4caf50;">✓ Видео будет считаться просмотренным в любом случае через ' + currentVideo.watchTime + ' секунд.</span>' +
-                        '</div>';
-                }}
-                
-                // Включаем кнопку пропуска и кнопку ручного открытия
-                skipButton.disabled = false;
-                manualButton.disabled = false;
-            }}
-            
-            // Остановка просмотра
-            function stopWatching() {{
-                if (timer) {{
-                    clearInterval(timer);
-                    timer = null;
-                }}
-                
-                if (player && player.pauseVideo) {{
-                    player.pauseVideo();
-                }}
-                
-                watching = false;
-                startButton.textContent = '▶️ Продолжить просмотр';
-                skipButton.disabled = true;
-                manualButton.disabled = true;
-            }}
-            
-            // Обработчики событий
-            startButton.addEventListener('click', () => {{
-                if (watching) {{
-                    stopWatching();
-                }} else {{
-                    watching = true;
-                    startButton.textContent = '⏸️ Пауза';
-                    playCurrentVideo();
-                }}
-            }});
-            
-            skipButton.addEventListener('click', () => {{
-                if (watching) {{
-                    clearInterval(timer);
-                    
-                    // Отмечаем текущее видео как просмотренное
-                    updateVideoStatus(currentVideoIndex, 'Завершено');
-                    
-                    // Переходим к следующему
-                    currentVideoIndex++;
-                    
-                    // Воспроизводим следующее
-                    playCurrentVideo();
-                }}
-            }});
-            
-            manualButton.addEventListener('click', () => {{
-                if (watching && currentVideoIndex < videos.length) {{
-                    const currentVideo = videos[currentVideoIndex];
-                    window.open(currentVideo.url, '_blank');
-                }}
-            }});
-            
-            // Предупреждение при попытке закрыть страницу
-            window.addEventListener('beforeunload', (e) => {{
-                if (watching) {{
-                    e.preventDefault();
-                    e.returnValue = 'Просмотр видео не завершен. Закрытие страницы прервет процесс просмотра.';
-                    return e.returnValue;
-                }}
-            }});
-        </script>
-    </body>
-    </html>
-    """
-    
-    return html_content
+        elif start_analysis:
+            st.warning("Пожалуйста, введите хотя бы одну ссылку на YouTube видео.")
 
 if __name__ == "__main__":
     main() 

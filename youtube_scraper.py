@@ -831,6 +831,10 @@ class YouTubeAnalyzer:
             date_text = date_text.strip()
             logger.debug(f"Попытка разобрать дату из текста: '{date_text}'")
             
+            # Предварительная обработка текста для удаления лишних символов и приведения к стандартному виду
+            clean_text = date_text.lower()
+            clean_text = re.sub(r'\s+', ' ', clean_text)  # Заменяем множественные пробелы на один
+            
             # ОБРАБОТКА ОТНОСИТЕЛЬНЫХ ДАТ (ago/назад)
             relative_patterns = [
                 # Часы (English & Russian)
@@ -853,13 +857,13 @@ class YouTubeAnalyzer:
             ]
             
             for pattern, time_func in relative_patterns:
-                match = re.search(pattern, date_text, re.IGNORECASE)
+                match = re.search(pattern, clean_text, re.IGNORECASE)
                 if match:
                     if len(match.groups()) > 0:
                         value = match.group(1)
                         return time_func(value)
                     else:
-                        return time_func(date_text)
+                        return time_func(clean_text)
             
             # ОБРАБОТКА АБСОЛЮТНЫХ ДАТ
             
@@ -867,112 +871,107 @@ class YouTubeAnalyzer:
             # Английские месяцы
             english_months = {
                 'jan': 1, 'feb': 2, 'mar': 3, 'apr': 4, 'may': 5, 'jun': 6,
-                'jul': 7, 'aug': 8, 'sep': 9, 'oct': 10, 'nov': 11, 'dec': 12
+                'jul': 7, 'aug': 8, 'sep': 9, 'oct': 10, 'nov': 11, 'dec': 12,
+                'january': 1, 'february': 2, 'march': 3, 'april': 4, 'june': 6,
+                'july': 7, 'august': 8, 'september': 9, 'october': 10, 'november': 11, 'december': 12
             }
             
             # Русские месяцы
             russian_months = {
                 'янв': 1, 'фев': 2, 'мар': 3, 'апр': 4, 'май': 5, 'июн': 6,
-                'июл': 7, 'авг': 8, 'сен': 9, 'окт': 10, 'ноя': 11, 'дек': 12
+                'июл': 7, 'авг': 8, 'сен': 9, 'окт': 10, 'ноя': 11, 'дек': 12,
+                'января': 1, 'февраля': 2, 'марта': 3, 'апреля': 4, 'мая': 5, 'июня': 6,
+                'июля': 7, 'августа': 8, 'сентября': 9, 'октября': 10, 'ноября': 11, 'декабря': 12
             }
             
-            # Пытаемся найти стандартные форматы
-            # Форматы типа "Jan 1, 2023" или "1 января 2023"
-            month_patterns = [
-                # English: Jan 1, 2023 or January 1, 2023
-                r'(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+(\d{1,2})(?:st|nd|rd|th)?,?\s+(\d{4})',
-                # English: 1 Jan 2023 or 1 January 2023
-                r'(\d{1,2})(?:st|nd|rd|th)?\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+(\d{4})',
-                # Русский: 1 янв 2023 или 1 января 2023
-                r'(\d{1,2})\s+(?:янв|фев|мар|апр|май|июн|июл|авг|сен|окт|ноя|дек)[а-я]*\.?\s+(\d{4})',
-                # Форматы с дефисом: 1-Jan-2023
-                r'(\d{1,2})-(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*-(\d{4})',
-                # Форматы со слешем: 1/Jan/2023
-                r'(\d{1,2})/(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*/(\d{4})'
-            ]
-
-            lowercase_text = date_text.lower()
+            # Проверяем наличие месяцев в тексте напрямую
+            month_found = None
+            month_value = None
             
-            # Проверка форматов с месяцами
-            for pattern in month_patterns:
-                match = re.search(pattern, lowercase_text, re.IGNORECASE)
-                if match:
-                    month_str = None
-                    day = None
-                    year = None
-                    
-                    # Определяем, какой формат найден и извлекаем компоненты
-                    if len(match.groups()) == 2:
-                        for month_name in list(english_months.keys()) + list(russian_months.keys()):
-                            if month_name in lowercase_text:
-                                month_str = month_name
-                                break
-                                
-                        if month_str:
-                            if month_str in english_months:
-                                month = english_months[month_str]
-                            else:
-                                month = russian_months[month_str]
-                                
-                            # Определяем порядок дня и года в совпадении
-                            if re.search(r'^\d{1,2}', match.group(0)):
-                                # Формат: день месяц год
-                                day = int(match.group(1))
-                                year = int(match.group(2))
-                            else:
-                                # Формат: месяц день год
-                                day = int(match.group(1))
-                                year = int(match.group(2))
-                                
-                            try:
-                                return datetime(year, month, day)
-                            except ValueError:
-                                # В случае ошибки из-за неправильной даты
-                                pass
+            for month_name, month_num in {**english_months, **russian_months}.items():
+                if month_name in clean_text:
+                    month_found = month_name
+                    month_value = month_num
+                    break
             
-            # Формат ISO 8601: YYYY-MM-DD
-            iso_match = re.search(r'(\d{4})-(\d{2})-(\d{2})', date_text)
-            if iso_match:
-                year, month, day = map(int, iso_match.groups())
-                try:
-                    return datetime(year, month, day)
-                except ValueError:
-                    pass
-            
-            # Формат DD.MM.YYYY
-            dmy_match = re.search(r'(\d{1,2})\.(\d{1,2})\.(\d{4})', date_text)
-            if dmy_match:
-                day, month, year = map(int, dmy_match.groups())
-                try:
-                    return datetime(year, month, day)
-                except ValueError:
-                    pass
-            
-            # Форматы MM/DD/YYYY и DD/MM/YYYY
-            slash_match = re.search(r'(\d{1,2})/(\d{1,2})/(\d{4})', date_text)
-            if slash_match:
-                # Проверяем оба варианта, так как формат может быть разным
-                try:
-                    # Сначала пробуем MM/DD/YYYY
-                    month, day, year = map(int, slash_match.groups())
-                    return datetime(year, month, day)
-                except ValueError:
+            if month_found:
+                # Ищем день и год рядом с месяцем
+                day_match = re.search(r'(\d{1,2})[^\d]' + month_found, clean_text) or re.search(month_found + r'[^\d](\d{1,2})', clean_text)
+                year_match = re.search(r'(\d{4})', clean_text)
+                
+                if day_match and year_match:
                     try:
-                        # Затем пробуем DD/MM/YYYY
-                        day, month, year = map(int, slash_match.groups())
-                        return datetime(year, month, day)
+                        day = int(day_match.group(1))
+                        year = int(year_match.group(1))
+                        return datetime(year, month_value, day)
                     except ValueError:
                         pass
             
+            # Форматы даты с разделителями
+            date_patterns = [
+                # ISO 8601: YYYY-MM-DD
+                (r'(\d{4})-(\d{1,2})-(\d{1,2})', lambda y, m, d: datetime(int(y), int(m), int(d))),
+                # DD.MM.YYYY
+                (r'(\d{1,2})\.(\d{1,2})\.(\d{4})', lambda d, m, y: datetime(int(y), int(m), int(d))),
+                # MM/DD/YYYY или DD/MM/YYYY (пробуем оба)
+                (r'(\d{1,2})/(\d{1,2})/(\d{4})', lambda a, b, y: try_date_formats(a, b, y)),
+                # DD-MM-YYYY
+                (r'(\d{1,2})-(\d{1,2})-(\d{4})', lambda d, m, y: datetime(int(y), int(m), int(d))),
+            ]
+            
+            def try_date_formats(a, b, y):
+                """Пробует разные форматы даты MM/DD/YYYY и DD/MM/YYYY"""
+                try:
+                    # Сначала MM/DD/YYYY
+                    return datetime(int(y), int(a), int(b))
+                except ValueError:
+                    try:
+                        # Затем DD/MM/YYYY
+                        return datetime(int(y), int(b), int(a))
+                    except ValueError:
+                        return None
+            
+            for pattern, date_func in date_patterns:
+                match = re.search(pattern, clean_text)
+                if match:
+                    try:
+                        result = date_func(*match.groups())
+                        if result:
+                            return result
+                    except ValueError:
+                        continue
+            
             # Другие специальные форматы
             # Например, "Published on XXX" или "Premiered XXX"
-            published_match = re.search(r'(?:published|premiered|streamed|опубликовано|трансляция)(?:\s+on)?\s+(.*)', 
-                                        date_text, re.IGNORECASE)
-            if published_match:
-                # Рекурсивно обрабатываем часть после "Published on"
-                return self._parse_publication_date(published_match.group(1))
+            published_patterns = [
+                r'(?:published|premiered|streamed|опубликовано|трансляция)(?:\s+on)?\s+(.*)',
+                r'(?:вышло|стрим|эфир|вышла)\s+(.*)'
+            ]
             
-            # Если ни один из форматов не подошел
+            for pattern in published_patterns:
+                published_match = re.search(pattern, clean_text, re.IGNORECASE)
+                if published_match:
+                    # Рекурсивно обрабатываем часть после маркера публикации
+                    return self._parse_publication_date(published_match.group(1))
+            
+            # Если ни один из форматов не подошел, ищем любые упоминания дат в тексте
+            # Например, сначала цифры, потом "ago/назад"
+            any_date_match = re.search(r'(\d+)\s*\w+\s*(?:ago|назад)', clean_text)
+            if any_date_match:
+                # Просто используем текущее число, как приблизительное
+                num = int(any_date_match.group(1))
+                # Если число похоже на день месяца (1-31), предполагаем дни
+                if 1 <= num <= 31:
+                    return datetime.now() - timedelta(days=num)
+                # Если похоже на час (до 24), предполагаем часы
+                elif 1 <= num <= 24:
+                    return datetime.now() - timedelta(hours=num)
+                # Иначе для больших чисел предполагаем какой-то тип единиц
+                else:
+                    # По умолчанию предполагаем дни
+                    return datetime.now() - timedelta(days=min(num, 365*5))  # ограничиваем 5 годами
+            
+            # Если ни один из методов не сработал
             logger.debug(f"Не удалось разобрать дату из текста: '{date_text}'")
             return None
             
@@ -1204,7 +1203,8 @@ class YouTubeAnalyzer:
                 "span.view-count",
                 "#info-text .view-count",
                 ".ytd-video-view-count-renderer",
-                "#info-strings yt-formatted-string"
+                "#info-strings yt-formatted-string",
+                "#info ytd-video-view-count-renderer"
             ]
             
             views = None
@@ -1215,23 +1215,30 @@ class YouTubeAnalyzer:
                     if views_text:
                         logger.info(f"Найдено количество просмотров: {views_text}")
                         # Извлекаем число просмотров из текста
-                        views_match = re.search(r'(\d[\d\s.,]*)', views_text)
+                        # Ищем все цифры с возможными разделителями (пробел, запятая, точка)
+                        views_match = re.search(r'([\d\s.,]+)', views_text)
                         if views_match:
-                            views_str = views_match.group(1).replace(" ", "").replace(",", "").replace(".", "")
+                            # Извлекаем найденную группу и очищаем от символов
+                            views_str = views_match.group(1).strip()
+                            # Удаляем все нецифровые символы, кроме последней точки или запятой (может быть десятичным разделителем)
+                            views_clean = re.sub(r'[^\d]', '', views_str)
                             try:
-                                views = int(views_str)
+                                views = int(views_clean)
                                 break
                             except ValueError:
                                 pass
                 except (NoSuchElementException, StaleElementReferenceException):
                     continue
             
-            # Если селекторы не сработали, пробуем XPath
+            # Если селекторы не сработали, пробуем XPath с улучшенными селекторами
             if views is None:
                 xpath_selectors = [
                     "//span[contains(@class, 'view-count')]",
                     "//span[contains(text(), 'просмотр')]",
-                    "//span[contains(text(), 'view')]"
+                    "//span[contains(text(), 'view')]",
+                    "//*[contains(@class, 'ytd-video-view-count-renderer')]",
+                    "//ytd-video-view-count-renderer",
+                    "//*[contains(text(), 'просмотр') or contains(text(), 'view')]"
                 ]
                 
                 for xpath in xpath_selectors:
@@ -1239,17 +1246,58 @@ class YouTubeAnalyzer:
                         views_element = element.find_element(By.XPATH, xpath)
                         views_text = views_element.text.strip()
                         if views_text:
-                            # Пытаемся извлечь число просмотров
-                            views_match = re.search(r'(\d[\d\s.,]*)', views_text)
+                            # Пытаемся извлечь число просмотров с более гибким поиском
+                            views_match = re.search(r'([\d\s.,]+)', views_text)
                             if views_match:
-                                views_str = views_match.group(1).replace(" ", "").replace(",", "").replace(".", "")
+                                views_str = views_match.group(1).strip()
+                                # Удаляем все нецифровые символы
+                                views_clean = re.sub(r'[^\d]', '', views_str)
                                 try:
-                                    views = int(views_str)
+                                    views = int(views_clean)
                                     break
                                 except ValueError:
                                     pass
                     except (NoSuchElementException, StaleElementReferenceException):
                         continue
+            
+            # Если все методы не сработали, пробуем через JavaScript
+            if views is None:
+                try:
+                    views_js = self.driver.execute_script("""
+                        // Попытка получить просмотры через элементы DOM
+                        var viewElements = document.querySelectorAll('.view-count, [class*="view-count"], span[class*="ViewCount"]');
+                        
+                        for (var i = 0; i < viewElements.length; i++) {
+                            var text = viewElements[i].textContent || viewElements[i].innerText;
+                            if (text && /\\d/.test(text)) {
+                                return text.trim();
+                            }
+                        }
+                        
+                        // Проверка текстов, содержащих упоминания просмотров
+                        var allElements = document.querySelectorAll('*');
+                        for (var i = 0; i < allElements.length; i++) {
+                            var text = allElements[i].textContent || allElements[i].innerText;
+                            if (text && (text.includes('просмотр') || text.includes('view')) && /\\d/.test(text)) {
+                                return text.trim();
+                            }
+                        }
+                        
+                        return null;
+                    """)
+                    
+                    if views_js:
+                        logger.info(f"Найдено количество просмотров через JavaScript: {views_js}")
+                        views_match = re.search(r'([\d\s.,]+)', views_js)
+                        if views_match:
+                            views_str = views_match.group(1).strip()
+                            views_clean = re.sub(r'[^\d]', '', views_str)
+                            try:
+                                views = int(views_clean)
+                            except ValueError:
+                                pass
+                except Exception as js_error:
+                    logger.warning(f"Ошибка при получении просмотров через JavaScript: {js_error}")
             
             # Если все методы не сработали, используем значение по умолчанию
             if views is None:
@@ -2465,6 +2513,277 @@ class YouTubeAnalyzer:
         except Exception as e:
             logger.warning(f"Ошибка при обработке рекламы: {e}")
 
+    def test_video_parameters(self, video_urls: List[str]) -> pd.DataFrame:
+        """
+        Тестирует алгоритм сбора параметров видео.
+        
+        Args:
+            video_urls (List[str]): Список URL видео для анализа.
+            
+        Returns:
+            pd.DataFrame: Таблица с параметрами видео (URL, заголовок, дни с момента публикации, просмотры).
+        """
+        logger.info(f"Запуск тестирования параметров для {len(video_urls)} видео")
+        
+        results = []
+        
+        # Проверяем, инициализирован ли драйвер
+        if self.driver is None:
+            try:
+                logger.info("Драйвер не инициализирован, пытаемся инициализировать в test_video_parameters")
+                self.setup_driver()
+                # Проверяем еще раз после инициализации
+                if self.driver is None:
+                    logger.error("Не удалось инициализировать драйвер в test_video_parameters")
+                    return pd.DataFrame(columns=["URL", "Заголовок", "Дней с публикации", "Просмотры", "Ошибка"])
+            except Exception as e:
+                logger.error(f"Ошибка при инициализации драйвера в test_video_parameters: {e}")
+                return pd.DataFrame(columns=["URL", "Заголовок", "Дней с публикации", "Просмотры", "Ошибка"])
+        
+        for url in video_urls:
+            try:
+                logger.info(f"Анализ видео: {url}")
+                
+                # Получаем данные о видео
+                video_info = self.get_video_details(url)
+                
+                # Вычисляем количество дней с момента публикации
+                days_since_publication = None
+                if "publication_date" in video_info and video_info["publication_date"]:
+                    pub_date = video_info["publication_date"]
+                    days_since_publication = (datetime.now() - pub_date).days
+                
+                # Получаем количество просмотров
+                views = video_info.get("views", 0)
+                
+                # Получаем заголовок
+                title = video_info.get("title", "Нет заголовка")
+                
+                # Формируем запись для результата
+                result = {
+                    "URL": url,
+                    "Заголовок": title,
+                    "Дней с публикации": days_since_publication,
+                    "Просмотры": views,
+                    "Ошибка": None
+                }
+                
+                results.append(result)
+                
+            except Exception as e:
+                logger.error(f"Ошибка при анализе видео {url}: {e}")
+                results.append({
+                    "URL": url,
+                    "Заголовок": "Ошибка",
+                    "Дней с публикации": None,
+                    "Просмотры": None,
+                    "Ошибка": str(e)
+                })
+        
+        # Создаем DataFrame с результатами
+        df = pd.DataFrame(results)
+        
+        # Форматируем данные для читаемости
+        try:
+            if not df.empty:
+                # Округляем количество просмотров для удобного отображения
+                df["Просмотры"] = df["Просмотры"].apply(
+                    lambda x: f"{x:,}".replace(",", " ") if pd.notna(x) else "—"
+                )
+                
+                # Форматируем дни с публикации
+                df["Дней с публикации"] = df["Дней с публикации"].apply(
+                    lambda x: f"{int(x)}" if pd.notna(x) else "—"
+                )
+        except Exception as e:
+            logger.warning(f"Ошибка при форматировании данных: {e}")
+        
+        logger.info(f"Тестирование параметров видео завершено. Проанализировано {len(results)} видео.")
+        
+        return df
+        
+    def render_video_tester_interface(self) -> str:
+        """
+        Создает HTML-разметку для веб-интерфейса тестирования параметров видео.
+        
+        Returns:
+            str: HTML-код интерфейса тестирования
+        """
+        html = """
+        <div class="video-tester-container" style="margin: 20px 0; border: 1px solid #ddd; border-radius: 6px; overflow: hidden;">
+            <div class="video-tester-header" style="background-color: #f8f9fa; padding: 15px; cursor: pointer; border-bottom: 1px solid #ddd;" 
+                 onclick="toggleVideoTester()">
+                <h3 style="margin: 0; font-size: 18px; display: flex; align-items: center;">
+                    <span id="video-tester-icon" style="margin-right: 10px;">▶</span>
+                    Тестирование алгоритма сбора параметров видео
+                </h3>
+            </div>
+            
+            <div id="video-tester-content" style="display: none; padding: 20px; background-color: white;">
+                <p style="margin-bottom: 15px; color: #666;">
+                    Введите ссылки на YouTube видео (по одной в строке) для проверки точности алгоритма 
+                    сбора данных. Для каждого видео будет показано количество дней с момента публикации 
+                    и количество просмотров.
+                </p>
+                
+                <div style="margin-bottom: 20px;">
+                    <label for="video-urls" style="display: block; margin-bottom: 8px; font-weight: bold;">
+                        Ссылки на YouTube видео:
+                    </label>
+                    <textarea id="video-urls" style="width: 100%; min-height: 100px; padding: 10px; border: 1px solid #ddd; border-radius: 4px; resize: vertical;"
+                         placeholder="https://www.youtube.com/watch?v=..."></textarea>
+                </div>
+                
+                <div style="display: flex; align-items: center; margin-bottom: 20px;">
+                    <button id="test-videos-btn" style="padding: 8px 16px; background-color: #4285f4; color: white; border: none; border-radius: 4px; cursor: pointer;">
+                        Проверить параметры
+                    </button>
+                    <div id="loader" style="display: none; margin-left: 15px;">
+                        Анализ видео... <span style="display: inline-block; width: 16px; height: 16px; border: 3px solid #ddd; border-top: 3px solid #3498db; border-radius: 50%; animation: spin 1s linear infinite;"></span>
+                    </div>
+                </div>
+                
+                <div id="results-container" style="display: none;">
+                    <h4 style="margin-top: 0; margin-bottom: 15px;">Результаты анализа:</h4>
+                    <div id="results-table" style="overflow-x: auto;"></div>
+                </div>
+                
+                <style>
+                @keyframes spin {
+                    0% { transform: rotate(0deg); }
+                    100% { transform: rotate(360deg); }
+                }
+                #video-tester-content table {
+                    width: 100%;
+                    border-collapse: collapse;
+                    margin-top: 10px;
+                }
+                #video-tester-content th, #video-tester-content td {
+                    padding: 10px;
+                    border: 1px solid #ddd;
+                    text-align: left;
+                }
+                #video-tester-content th {
+                    background-color: #f8f9fa;
+                }
+                #video-tester-content tr:nth-child(even) {
+                    background-color: #f8f9fa;
+                }
+                #video-tester-content tr:hover {
+                    background-color: #f2f2f2;
+                }
+                #video-tester-content .numeric {
+                    text-align: right;
+                }
+                </style>
+                
+                <script>
+                // Функция для открытия/закрытия блока тестирования
+                function toggleVideoTester() {
+                    const content = document.getElementById('video-tester-content');
+                    const icon = document.getElementById('video-tester-icon');
+                    
+                    if (content.style.display === 'none') {
+                        content.style.display = 'block';
+                        icon.textContent = '▼';
+                    } else {
+                        content.style.display = 'none';
+                        icon.textContent = '▶';
+                    }
+                }
+                
+                // Обработчик для кнопки тестирования
+                document.getElementById('test-videos-btn').addEventListener('click', function() {
+                    const urlsInput = document.getElementById('video-urls').value.trim();
+                    if (!urlsInput) {
+                        alert('Пожалуйста, введите хотя бы одну ссылку на YouTube видео');
+                        return;
+                    }
+                    
+                    // Разбиваем текст на строки и очищаем их
+                    const urls = urlsInput.split('\\n')
+                        .map(url => url.trim())
+                        .filter(url => url.length > 0);
+                    
+                    // Проверяем на корректность URL
+                    const youtubePattern = /^(https?:\\/\\/)?(www\\.)?(youtube\\.com\\/watch\\?v=|youtu\\.be\\/)([a-zA-Z0-9_-]{11}).*$/i;
+                    const invalidUrls = urls.filter(url => !youtubePattern.test(url));
+                    
+                    if (invalidUrls.length > 0) {
+                        alert('Следующие URL имеют некорректный формат:\\n' + invalidUrls.join('\\n'));
+                        return;
+                    }
+                    
+                    // Показываем индикатор загрузки
+                    document.getElementById('loader').style.display = 'inline-block';
+                    document.getElementById('results-container').style.display = 'none';
+                    
+                    // Делаем запрос на сервер
+                    analyzeVideos(urls);
+                });
+                
+                // Функция для анализа видео
+                function analyzeVideos(urls) {
+                    // В реальном приложении здесь был бы AJAX-запрос
+                    // Имитируем задержку и получение данных
+                    setTimeout(function() {
+                        // Скрываем индикатор загрузки
+                        document.getElementById('loader').style.display = 'none';
+                        
+                        // Имитация данных от сервера
+                        const results = [];
+                        for (let url of urls) {
+                            results.push({
+                                'URL': url,
+                                'Заголовок': 'Заголовок будет получен при реальном запросе',
+                                'Дней с публикации': '42', // Будет заменено реальными данными
+                                'Просмотры': '123 456' // Будет заменено реальными данными
+                            });
+                        }
+                        
+                        // Создаем таблицу результатов
+                        showResults(results);
+                    }, 1500); // Имитация времени загрузки
+                }
+                
+                // Функция для отображения результатов
+                function showResults(results) {
+                    const container = document.getElementById('results-container');
+                    const tableContainer = document.getElementById('results-table');
+                    
+                    // Создаем таблицу
+                    let tableHTML = '<table>';
+                    
+                    // Заголовок таблицы
+                    tableHTML += '<thead><tr>';
+                    tableHTML += '<th>URL</th>';
+                    tableHTML += '<th>Заголовок</th>';
+                    tableHTML += '<th class="numeric">Дней с публикации</th>';
+                    tableHTML += '<th class="numeric">Просмотры</th>';
+                    tableHTML += '</tr></thead>';
+                    
+                    // Тело таблицы
+                    tableHTML += '<tbody>';
+                    for (let result of results) {
+                        tableHTML += '<tr>';
+                        tableHTML += `<td><a href="${result.URL}" target="_blank">${result.URL}</a></td>`;
+                        tableHTML += `<td>${result.Заголовок}</td>`;
+                        tableHTML += `<td class="numeric">${result['Дней с публикации']}</td>`;
+                        tableHTML += `<td class="numeric">${result.Просмотры}</td>`;
+                        tableHTML += '</tr>';
+                    }
+                    tableHTML += '</tbody></table>';
+                    
+                    // Вставляем таблицу и показываем контейнер
+                    tableContainer.innerHTML = tableHTML;
+                    container.style.display = 'block';
+                }
+                </script>
+            </div>
+        </div>
+        """
+        return html
+
 def check_proxy(proxy_string: str) -> Tuple[bool, str]:
     """
     Проверяет работоспособность прокси-сервера
@@ -2648,19 +2967,86 @@ def test_proxies(proxy_list: List[str]) -> List[Dict]:
 
 # Пример использования
 if __name__ == "__main__":
-    # Пример списка прокси для проверки
-    servers = [
-        "185.241.70.43:8000:2e1U2g:Aju5tn",
-        "213.139.218.40:8000:2e1U2g:Aju5tn",
-        "213.139.218.131:8000:2e1U2g:Aju5tn"
-    ]
+    import argparse
     
-    working_proxies = test_proxies(servers)
+    parser = argparse.ArgumentParser(description="YouTube Scraper")
+    parser.add_argument("--mode", choices=["proxy_test", "video_test"], 
+                        default="proxy_test", help="Режим работы скрипта")
+    parser.add_argument("--urls", nargs="+", help="Список URL для анализа видео")
+    parser.add_argument("--render-html", action="store_true", help="Вывести HTML-интерфейс для тестирования")
     
-    # Вывод рабочих прокси для использования
-    if working_proxies:
-        print("\nРабочие прокси для использования:")
-        for proxy in working_proxies:
-            print(f"Сервер: {proxy['server']}, HTTP: {proxy['http']}")
-    else:
-        print("\nНе найдено рабочих прокси. Проверьте настройки или попробуйте другие серверы.") 
+    args = parser.parse_args()
+    
+    if args.mode == "proxy_test":
+        # Пример списка прокси для проверки
+        servers = [
+            "185.241.70.43:8000:2e1U2g:Aju5tn",
+            "213.139.218.40:8000:2e1U2g:Aju5tn",
+            "213.139.218.131:8000:2e1U2g:Aju5tn"
+        ]
+        
+        working_proxies = test_proxies(servers)
+        
+        # Вывод рабочих прокси для использования
+        if working_proxies:
+            print("\nРабочие прокси для использования:")
+            for proxy in working_proxies:
+                print(f"Сервер: {proxy['server']}, HTTP: {proxy['http']}")
+        else:
+            print("\nНе найдено рабочих прокси. Проверьте настройки или попробуйте другие серверы.")
+    
+    elif args.mode == "video_test":
+        # Инициализируем анализатор
+        analyzer = YouTubeAnalyzer(headless=True, use_proxy=False)
+        
+        # Если запрошен вывод HTML-интерфейса
+        if args.render_html:
+            # Выводим HTML-интерфейс для веб-приложения
+            html_interface = analyzer.render_video_tester_interface()
+            print(html_interface)
+            analyzer.quit_driver()
+            exit(0)
+        
+        # Тестирование параметров видео через консоль
+        print("\n=== Тестирование алгоритма сбора параметров видео ===")
+        
+        # Если URL не указаны, используем тестовые
+        if not args.urls:
+            print("URL видео не указаны, используются тестовые примеры")
+            test_urls = [
+                "https://www.youtube.com/watch?v=dQw4w9WgXcQ",  # Известное видео Rick Astley
+                "https://www.youtube.com/watch?v=jNQXAC9IVRw"   # Первое видео на YouTube
+            ]
+        else:
+            test_urls = args.urls
+            
+        print(f"Анализируем {len(test_urls)} видео...")
+        
+        try:
+            # Получаем и выводим результаты
+            results_df = analyzer.test_video_parameters(test_urls)
+            
+            if not results_df.empty:
+                # Выводим результаты в консоль
+                print("\nРезультаты анализа параметров видео:")
+                print("=" * 80)
+                for _, row in results_df.iterrows():
+                    print(f"URL: {row['URL']}")
+                    print(f"Заголовок: {row['Заголовок']}")
+                    print(f"Дней с публикации: {row['Дней с публикации']}")
+                    print(f"Просмотры: {row['Просмотры']}")
+                    if row['Ошибка']:
+                        print(f"Ошибка: {row['Ошибка']}")
+                    print("-" * 80)
+            else:
+                print("Не удалось получить данные о видео")
+                
+            # Закрываем драйвер
+            analyzer.quit_driver()
+            
+        except Exception as e:
+            print(f"Ошибка при анализе видео: {e}")
+            import traceback
+            traceback.print_exc()
+    
+    print("Работа скрипта завершена")
