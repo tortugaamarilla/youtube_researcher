@@ -1446,7 +1446,7 @@ def test_recommendations(source_links: List[str],
             # Преобразуем ссылки на каналы в активные для отображения в Streamlit
             if "Канал" in df.columns:
                 df["Канал"] = df["Канал"].apply(
-                    lambda x: f'<a href="{x}" target="_blank">{x.split("@")[1] if "@" in x else x}</a>' if isinstance(x, str) and x else x
+                    lambda x: f'<a href="{x}" target="_blank">{x}</a>' if isinstance(x, str) and x else x
                 )
             
             return df
@@ -2132,6 +2132,10 @@ def display_results_tab1():
         if "Ссылка на видео" in export_df.columns:
             export_df["Ссылка на видео"] = export_df["Ссылка на видео"].str.replace(r'<a href="(.+?)".*?>.*?</a>', r'\1', regex=True)
         
+        # Очищаем колонку "Канал" от HTML-тегов для экспорта
+        if "Канал" in export_df.columns:
+            export_df["Канал"] = export_df["Канал"].str.replace(r'<a href="(.+?)".*?>.*?</a>', r'\1', regex=True)
+        
         csv = export_df.to_csv(index=False, sep='\t')
         b64 = base64.b64encode(csv.encode()).decode()
         href = f'<div style="text-align: right; margin: 10px 0;"><a href="data:file/csv;base64,{b64}" download="youtube_results.tsv" style="background-color: #4CAF50; color: white; padding: 8px 16px; text-decoration: none; border-radius: 4px;">📊 Скачать TSV файл</a></div>'
@@ -2151,6 +2155,10 @@ def display_results_tab2():
         export_df = st.session_state["filtered_df"].copy()
         if "Ссылка на видео" in export_df.columns:
             export_df["Ссылка на видео"] = export_df["Ссылка на видео"].str.replace(r'<a href="(.+?)".*?>.*?</a>', r'\1', regex=True)
+        
+        # Очищаем колонку "Канал" от HTML-тегов для экспорта
+        if "Канал" in export_df.columns:
+            export_df["Канал"] = export_df["Канал"].str.replace(r'<a href="(.+?)".*?>.*?</a>', r'\1', regex=True)
         
         csv = export_df.to_csv(index=False, sep='\t')
         b64 = base64.b64encode(csv.encode()).decode()
@@ -2178,6 +2186,10 @@ def display_results_tab3():
     export_df = display_df.copy()
     if "Ссылка на видео" in export_df.columns:
         export_df["Ссылка на видео"] = export_df["Ссылка на видео"].str.replace(r'<a href="(.+?)".*?>.*?</a>', r'\1', regex=True)
+    
+    # Очищаем колонку "Канал" от HTML-тегов для экспорта
+    if "Канал" in export_df.columns:
+        export_df["Канал"] = export_df["Канал"].str.replace(r'<a href="(.+?)".*?>.*?</a>', r'\1', regex=True)
     
     csv = export_df.to_csv(index=False, sep='\t')
     b64 = base64.b64encode(csv.encode()).decode()
