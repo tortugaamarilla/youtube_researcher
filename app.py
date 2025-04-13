@@ -364,9 +364,12 @@ def process_source_links(links: list,
                             if channel_videos:
                                 for video_url in channel_videos:
                                     try:
-                                        video_info = yt.get_video_details(video_url)
-                                        if video_info and 'publish_date' in video_info:
-                                            all_channel_videos.append((video_url, video_info['publish_date']))
+                                        # Используем быстрый метод для получения данных
+                                        video_data_df = yt.test_video_parameters_fast([video_url])
+                                        if not video_data_df.empty:
+                                            days_since_pub = int(video_data_df.iloc[0]["Дней с публикации"]) if video_data_df.iloc[0]["Дней с публикации"] != "—" else 0
+                                            publish_date = datetime.now() - timedelta(days=days_since_pub)
+                                            all_channel_videos.append((video_url, publish_date))
                                         else:
                                             all_channel_videos.append((video_url, datetime.now()))
                                     except:
@@ -1055,7 +1058,18 @@ def test_recommendations(source_links: List[str],
                     
                     # Получаем детали видео
                     status_text.text(f"Получение деталей видео: {video_url}")
-                    video_data = youtube_analyzer.get_video_details(video_url)
+                    # Используем быстрый метод вместо get_video_details
+                    video_data_df = youtube_analyzer.test_video_parameters_fast([video_url])
+                    video_data = None
+                    if not video_data_df.empty:
+                        # Преобразуем результат в формат словаря, совместимый с исходным
+                        video_data = {
+                            "url": video_url,
+                            "title": video_data_df.iloc[0]["Заголовок"],
+                            "views": video_data_df.iloc[0]["Просмотры_число"] if "Просмотры_число" in video_data_df.columns else int(video_data_df.iloc[0]["Просмотры"].replace(" ", "")),
+                            "publication_date": datetime.now() - timedelta(days=int(video_data_df.iloc[0]["Дней с публикации"])) if video_data_df.iloc[0]["Дней с публикации"] != "—" else datetime.now(),
+                            "channel_name": "YouTube"  # Имя канала не доступно через быстрый метод
+                        }
                     
                     # Проверяем, соответствует ли видео с исходного канала заданным параметрам
                     if video_data and quick_filter_video(video_data):
@@ -1088,8 +1102,18 @@ def test_recommendations(source_links: List[str],
             else:
                 # Для прямой ссылки на видео
                 status_text.text(f"Получение деталей видео: {url}")
-                video_data = youtube_analyzer.get_video_details(url)
-                stats["processed_videos"] += 1
+                # Используем быстрый метод вместо get_video_details
+                video_data_df = youtube_analyzer.test_video_parameters_fast([url])
+                video_data = None
+                if not video_data_df.empty:
+                    # Преобразуем результат в формат словаря, совместимый с исходным
+                    video_data = {
+                        "url": url,
+                        "title": video_data_df.iloc[0]["Заголовок"],
+                        "views": video_data_df.iloc[0]["Просмотры_число"] if "Просмотры_число" in video_data_df.columns else int(video_data_df.iloc[0]["Просмотры"].replace(" ", "")),
+                        "publication_date": datetime.now() - timedelta(days=int(video_data_df.iloc[0]["Дней с публикации"])) if video_data_df.iloc[0]["Дней с публикации"] != "—" else datetime.now(),
+                        "channel_name": "YouTube"  # Имя канала не доступно через быстрый метод
+                    }
                 
                 # Проверяем, соответствует ли видео заданным параметрам
                 if video_data and quick_filter_video(video_data):
@@ -1150,7 +1174,18 @@ def test_recommendations(source_links: List[str],
                 rec_url = rec["url"]
                 
                 # Получаем детали рекомендованного видео
-                rec_data = youtube_analyzer.get_video_details(rec_url)
+                # Используем быстрый метод вместо get_video_details
+                rec_data_df = youtube_analyzer.test_video_parameters_fast([rec_url])
+                rec_data = None
+                if not rec_data_df.empty:
+                    # Преобразуем результат в формат словаря, совместимый с исходным
+                    rec_data = {
+                        "url": rec_url,
+                        "title": rec_data_df.iloc[0]["Заголовок"],
+                        "views": rec_data_df.iloc[0]["Просмотры_число"] if "Просмотры_число" in rec_data_df.columns else int(rec_data_df.iloc[0]["Просмотры"].replace(" ", "")),
+                        "publication_date": datetime.now() - timedelta(days=int(rec_data_df.iloc[0]["Дней с публикации"])) if rec_data_df.iloc[0]["Дней с публикации"] != "—" else datetime.now(),
+                        "channel_name": "YouTube"  # Имя канала не доступно через быстрый метод
+                    }
                 stats["processed_videos"] += 1
                 
                 # Применяем фильтры к рекомендованным видео
