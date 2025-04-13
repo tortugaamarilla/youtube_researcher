@@ -1359,18 +1359,40 @@ def main():
             google_account = None
             
             if use_google_account:
-                col1, col2 = st.columns(2)
-                with col1:
-                    email = st.text_input("Email аккаунта Google", key="google_email")
-                with col2:
-                    password = st.text_input("Пароль", type="password", key="google_password")
+                # Добавляем выбор источника учетных данных
+                auth_source = st.radio(
+                    "Источник учетных данных:",
+                    options=["Ввести вручную", "Использовать из secrets.toml"],
+                    index=1
+                )
                 
-                # Создаем словарь с данными аккаунта
-                if email and password:
-                    google_account = {
-                        "email": email,
-                        "password": password
-                    }
+                if auth_source == "Ввести вручную":
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        email = st.text_input("Email аккаунта Google", key="google_email")
+                    with col2:
+                        password = st.text_input("Пароль", type="password", key="google_password")
+                    
+                    # Создаем словарь с данными аккаунта
+                    if email and password:
+                        google_account = {
+                            "email": email,
+                            "password": password
+                        }
+                else:
+                    # Пытаемся загрузить учетные данные из secrets.toml
+                    try:
+                        if "google" in st.secrets and st.secrets["google"]["email"] and st.secrets["google"]["password"]:
+                            google_account = {
+                                "email": st.secrets["google"]["email"],
+                                "password": st.secrets["google"]["password"]
+                            }
+                            st.success(f"✅ Учетные данные Google успешно загружены из secrets.toml ({google_account['email']})")
+                        else:
+                            st.error("❌ В файле secrets.toml не указаны email и/или пароль для Google аккаунта")
+                    except Exception as e:
+                        st.error(f"❌ Ошибка при загрузке учетных данных из secrets.toml: {str(e)}")
+                        st.info("Проверьте наличие файла .streamlit/secrets.toml и корректность его содержимого")
                 
                 # Отдельная кнопка для авторизации
                 auth_col1, auth_col2 = st.columns([1, 2])
@@ -1383,38 +1405,41 @@ def main():
                         auth_status.success(f"✅ Вы авторизованы как {st.session_state.get('google_account', {}).get('email', '')}")
 
                 if auth_button:
-                    with st.spinner("Выполняется авторизация в Google..."):
-                        # Создаем анализатор YouTube только для авторизации
-                        auth_analyzer = YouTubeAnalyzer(
-                            headless=False,  # Используем видимый режим для удобства пользователя
-                            use_proxy=use_proxy,
-                            google_account=google_account
-                        )
-                        
-                        # Инициализируем драйвер
-                        auth_analyzer.setup_driver()
-                        
-                        if auth_analyzer.driver:
-                            # Выполняем авторизацию
-                            success = auth_analyzer.login_to_google()
+                    if not google_account or not google_account.get("email") or not google_account.get("password"):
+                        auth_status.error("❌ Необходимо указать email и пароль от аккаунта Google")
+                    else:
+                        with st.spinner("Выполняется авторизация в Google..."):
+                            # Создаем анализатор YouTube только для авторизации
+                            auth_analyzer = YouTubeAnalyzer(
+                                headless=False,  # Используем видимый режим для удобства пользователя
+                                use_proxy=use_proxy,
+                                google_account=google_account
+                            )
                             
-                            if success or auth_analyzer.is_logged_in:
-                                st.session_state.google_account = google_account
-                                st.session_state.is_logged_in = True
-                                st.session_state.auth_analyzer = auth_analyzer
-                                auth_status.success(f"✅ Авторизация в Google успешно выполнена! ({email})")
-                            else:
-                                auth_status.error("❌ Не удалось выполнить авторизацию в Google. Проверьте данные аккаунта.")
+                            # Инициализируем драйвер
+                            auth_analyzer.setup_driver()
+                            
+                            if auth_analyzer.driver:
+                                # Выполняем авторизацию
+                                success = auth_analyzer.login_to_google()
                                 
-                                # Закрываем драйвер в случае неудачи
-                                try:
-                                    auth_analyzer.quit_driver()
-                                except:
-                                    pass
-                        else:
-                            auth_status.error("❌ Не удалось инициализировать браузер для авторизации.")
+                                if success or auth_analyzer.is_logged_in:
+                                    st.session_state.google_account = google_account
+                                    st.session_state.is_logged_in = True
+                                    st.session_state.auth_analyzer = auth_analyzer
+                                    auth_status.success(f"✅ Авторизация в Google успешно выполнена! ({google_account['email']})")
+                                else:
+                                    auth_status.error("❌ Не удалось выполнить авторизацию в Google. Проверьте данные аккаунта.")
+                                    
+                                    # Закрываем драйвер в случае неудачи
+                                    try:
+                                        auth_analyzer.quit_driver()
+                                    except:
+                                        pass
+                            else:
+                                auth_status.error("❌ Не удалось инициализировать браузер для авторизации.")
             else:
-                st.info("Введите email и пароль от аккаунта Google для авторизации")
+                st.info("Включите авторизацию Google для входа в аккаунт")
                 
             # Информация для пользователя
             st.info("""
@@ -1422,6 +1447,7 @@ def main():
             - При первом входе может потребоваться дополнительное подтверждение
             - Если включена двухфакторная аутентификация, вам потребуется ввести код подтверждения
             - Данные аккаунта хранятся только в памяти сессии и не сохраняются
+            - Для сохранения учетных данных можно использовать файл .streamlit/secrets.toml
             """)
         
         # Настройки предварительного просмотра
