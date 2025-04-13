@@ -554,12 +554,14 @@ class YouTubeAnalyzer:
         
         try:
             logger.info(f"Загружаем страницу видео для получения рекомендаций: {video_url}")
+            start_time = time.time()
             
             # Пробуем загрузить страницу несколько раз при необходимости
             max_attempts = 3
             for attempt in range(max_attempts):
                 try:
                     self.driver.get(video_url)
+                    logger.info(f"Загрузка страницы заняла {time.time() - start_time:.2f} сек")
                     break
                 except Exception as e:
                     logger.warning(f"Попытка {attempt+1}/{max_attempts} загрузки страницы не удалась: {e}")
@@ -569,6 +571,7 @@ class YouTubeAnalyzer:
             
             # Останавливаем воспроизведение видео для экономии ресурсов
             try:
+                video_pause_start = time.time()
                 self.driver.execute_script("""
                     // Останавливаем видео, если оно есть
                     var video = document.querySelector('video');
@@ -578,14 +581,28 @@ class YouTubeAnalyzer:
                         video.volume = 0;
                     }
                 """)
+                logger.info(f"Пауза видео заняла {time.time() - video_pause_start:.2f} сек")
             except:
                 pass
             
             # Даем время для загрузки рекомендаций (сокращаем с 3.0-5.0 до 1.5-2.0)
+            wait_start = time.time()
             self._random_sleep(1.5, 2.0)
+            logger.info(f"Ожидание загрузки рекомендаций заняло {time.time() - wait_start:.2f} сек")
+            
+            # Ждем появления контейнера с рекомендациями
+            try:
+                WebDriverWait(self.driver, 5).until(
+                    EC.presence_of_element_located((By.CSS_SELECTOR, "#related, #secondary, ytd-watch-next-secondary-results-renderer"))
+                )
+                logger.info("Контейнер с рекомендациями найден")
+            except TimeoutException:
+                logger.warning("Таймаут при ожидании контейнера с рекомендациями")
             
             # Прокручиваем страницу, чтобы загрузить все рекомендации
+            scroll_start = time.time()
             self._scroll_to_recommendations()
+            logger.info(f"Прокрутка к рекомендациям заняла {time.time() - scroll_start:.2f} сек")
             
             # Пробуем разные селекторы для рекомендаций
             recommendation_selectors = [
@@ -601,6 +618,7 @@ class YouTubeAnalyzer:
             recommendation_elements = []
             
             # Пробуем каждый селектор
+            find_start = time.time()
             for selector in recommendation_selectors:
                 try:
                     elements = self.driver.find_elements(By.CSS_SELECTOR, selector)
@@ -630,24 +648,25 @@ class YouTubeAnalyzer:
                 except Exception as e:
                     logger.warning(f"Не удалось найти рекомендации с помощью XPath: {e}")
             
+            logger.info(f"Поиск рекомендаций занял {time.time() - find_start:.2f} сек")
+            
             # Если всё ещё не нашли, пытаемся извлечь ссылки напрямую из HTML
             if not recommendation_elements:
                 logger.warning("Не удалось найти рекомендации через селекторы, пробуем анализировать HTML")
                 try:
+                    html_start = time.time()
                     html = self.driver.page_source
                     
                     # Ищем все URL видео на странице (шаблон для рекомендаций)
                     video_urls = re.findall(r'href=\"(/watch\?v=[^\"&]+)', html)
+                    video_urls = list(set(video_urls))  # Удаляем дубликаты
                     
                     if video_urls:
                         logger.info(f"Найдено {len(video_urls)} потенциальных рекомендаций через HTML-анализ")
                         
                         # Берем только уникальные URL и не больше лимита
                         seen_urls = set()
-                        for url_path in video_urls:
-                            if len(recommendations) >= limit:
-                                break
-                                
+                        for url_path in video_urls[:limit*2]: # Берем в два раза больше, чтобы после фильтрации осталось достаточно
                             full_url = f"https://www.youtube.com{url_path}"
                             
                             # Пропускаем текущее видео и дубликаты
@@ -657,12 +676,13 @@ class YouTubeAnalyzer:
                             seen_urls.add(full_url)
                             recommendations.append({"url": full_url})
                             
-                        logger.info(f"Добавлено {len(recommendations)} рекомендаций через HTML-анализ")
+                        logger.info(f"Добавлено {len(recommendations)} рекомендаций через HTML-анализ за {time.time() - html_start:.2f} сек")
                         return recommendations[:limit]
                 except Exception as e:
                     logger.error(f"Ошибка при анализе HTML для рекомендаций: {e}")
             
             # Обрабатываем найденные элементы
+            process_start = time.time()
             if recommendation_elements:
                 for idx, element in enumerate(recommendation_elements[:limit]):
                     try:
@@ -711,6 +731,7 @@ class YouTubeAnalyzer:
                         logger.warning(f"Ошибка при обработке рекомендации #{idx+1}: {e}")
                         continue
                 
+                logger.info(f"Обработка {len(recommendation_elements)} элементов заняла {time.time() - process_start:.2f} сек")
                 logger.info(f"Получено {len(recommendations)} рекомендаций для видео {video_url}")
                 
             else:
@@ -722,6 +743,10 @@ class YouTubeAnalyzer:
                     logger.info("Сохранен скриншот страницы рекомендаций")
                 except Exception as e:
                     logger.warning(f"Не удалось сохранить скриншот: {e}")
+            
+            # Логируем общее время выполнения метода
+            total_time = time.time() - start_time
+            logger.info(f"Общее время получения рекомендаций для {video_url}: {total_time:.2f} сек")
             
             return recommendations
         
