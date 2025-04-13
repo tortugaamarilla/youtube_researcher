@@ -161,3 +161,4 @@ cython_debug/
 technical_description.txt
 /.streamlit
 .cursorignore
+channel_list.txt
