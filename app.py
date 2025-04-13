@@ -1090,7 +1090,7 @@ def test_recommendations(source_links: List[str],
                     if not video_data_df.empty:
                         # Преобразуем результат в формат словаря, совместимый с исходным
                         video_data = {
-                            "url": video_url,
+                            "url": clean_youtube_url(video_url),
                             "title": video_data_df.iloc[0]["Заголовок"],
                             "views": video_data_df.iloc[0]["Просмотры_число"] if "Просмотры_число" in video_data_df.columns else int(video_data_df.iloc[0]["Просмотры"].replace(" ", "")),
                             "publication_date": datetime.now() - timedelta(days=int(video_data_df.iloc[0]["Дней с публикации"])) if video_data_df.iloc[0]["Дней с публикации"] != "—" else datetime.now(),
@@ -1123,7 +1123,7 @@ def test_recommendations(source_links: List[str],
                                 clean_rec_url = clean_youtube_url(rec_url)
                                 recommendation_urls.append({
                                     "url": clean_rec_url,
-                                    "source_video": video_url
+                                    "source_video": clean_youtube_url(video_url)
                                 })
                         
                         # Добавляем все рекомендации для этого видео в общий список
@@ -1145,7 +1145,7 @@ def test_recommendations(source_links: List[str],
                 if not video_data_df.empty:
                     # Преобразуем результат в формат словаря, совместимый с исходным
                     video_data = {
-                        "url": url,
+                        "url": clean_youtube_url(url),
                         "title": video_data_df.iloc[0]["Заголовок"],
                         "views": video_data_df.iloc[0]["Просмотры_число"] if "Просмотры_число" in video_data_df.columns else int(video_data_df.iloc[0]["Просмотры"].replace(" ", "")),
                         "publication_date": datetime.now() - timedelta(days=int(video_data_df.iloc[0]["Дней с публикации"])) if video_data_df.iloc[0]["Дней с публикации"] != "—" else datetime.now(),
@@ -1179,7 +1179,7 @@ def test_recommendations(source_links: List[str],
                             clean_rec_url = clean_youtube_url(rec_url)
                             recommendation_urls.append({
                                 "url": clean_rec_url,
-                                "source_video": url
+                                "source_video": clean_youtube_url(url)
                             })
                     
                     # Добавляем все рекомендации для этого видео в общий список
@@ -1245,7 +1245,9 @@ def test_recommendations(source_links: List[str],
                 # Применяем фильтры к рекомендованным видео
                 if rec_data and quick_filter_video(rec_data):
                     # Формируем список источников в удобном формате
-                    source_str = ", ".join([f"видео {src.split('watch?v=')[-1]}" for src in rec["sources"]])
+                    # Убедимся, что источники тоже очищены от параметров
+                    clean_sources = [clean_youtube_url(src) for src in rec["sources"]]
+                    source_str = ", ".join([f"видео {src.split('watch?v=')[-1]}" for src in clean_sources])
                     rec_data["source"] = f"Рекомендация для: {source_str}"
                     results.append(rec_data)
                     stats["added_videos"] += 1
@@ -1279,6 +1281,10 @@ def test_recommendations(source_links: List[str],
     if results:
         # Формируем датафрейм с нужными колонками
         df = pd.DataFrame(results)
+        
+        # Очищаем все URL-адреса в датафрейме от дополнительных параметров
+        if "url" in df.columns:
+            df["url"] = df["url"].apply(clean_youtube_url)
         
         # Добавляем нумерацию, начинающуюся с 1
         df.index = range(1, len(df) + 1)
