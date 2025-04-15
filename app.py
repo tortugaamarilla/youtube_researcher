@@ -2508,126 +2508,265 @@ def display_similar_channels_results():
     st.markdown(href, unsafe_allow_html=True)
 
 # Функция для поиска похожих каналов
-def find_similar_channels(video_df, min_views=1000, max_channel_age=None, use_api=False, api_key=None):
+def find_similar_channels(analyzer, channel_urls, source_videos_limit=30, recommendation_limit=30, 
+                           min_channel_views=50000, max_channel_age=0, progress_callback=None):
     """
-    Находит похожие каналы на основе комментариев к видео.
+    Находит похожие каналы на основе рекомендаций YouTube.
     
     Args:
-        video_df (DataFrame): DataFrame с данными о видео, должен включать столбец 'comments'
-        min_views (int, optional): Минимальное общее количество просмотров канала. По умолчанию 1000.
-        max_channel_age (int, optional): Максимальный возраст канала в днях. По умолчанию None (без ограничений).
-        use_api (bool, optional): Использовать ли API YouTube для получения данных каналов. По умолчанию False.
-        api_key (str, optional): Ключ API YouTube. Обязательно, если use_api=True.
+        analyzer: Экземпляр YouTubeAnalyzer
+        channel_urls: Список URL каналов для анализа
+        source_videos_limit: Количество видео с исходного канала
+        recommendation_limit: Количество рекомендаций для каждого видео
+        min_channel_views: Минимальное общее число просмотров на канале
+        max_channel_age: Максимальный возраст канала в днях (0 = без ограничений)
+        progress_callback: Функция обратного вызова для обновления прогресса
         
     Returns:
-        DataFrame: DataFrame с найденными каналами и их метриками
+        DataFrame с информацией о похожих каналах
     """
-    logger.info(f"Запуск анализа похожих каналов. Параметры: min_views={min_views}, max_channel_age={max_channel_age}, use_api={use_api}")
+    # Словарь для хранения информации о каналах
+    channels_info = {}
     
-    # Проверяем наличие данных
-    if 'comments' not in video_df.columns:
-        logger.warning("Столбец 'comments' отсутствует в DataFrame")
-        return pd.DataFrame()
+    # Кэш для хранения информации о видео и рекомендациях
+    video_cache = {}
+    channel_info_cache = {}
     
-    # Проверяем наличие ключа API, если требуется
-    if use_api and not api_key:
-        logger.error("Для использования API требуется ключ API")
-        return pd.DataFrame()
+    # Счетчики для отслеживания прогресса
+    total_channels = len(channel_urls)
+    total_source_videos = 0
+    processed_source_videos = 0
     
-    # Собираем уникальные ссылки на каналы из комментариев
-    channel_links = []
+    # Собираем все видео с исходных каналов
+    all_source_videos = []
     
-    for comments_str in video_df['comments'].dropna():
+    logger.info(f"Начинаем сбор видео с {total_channels} исходных каналов")
+    
+    # Этап 1: Сбор видео с исходных каналов
+    for channel_idx, channel_url in enumerate(channel_urls):
+        # Обновляем прогресс
+        if progress_callback:
+            current_progress = (channel_idx / total_channels) * 40  # Первые 40% прогресса на сбор видео
+            progress_callback(current_progress, f"Получение информации о канале {channel_idx+1}/{total_channels}...")
+        
         try:
-            # Парсим JSON строку комментариев
-            comments = json.loads(comments_str)
+            # Быстрое получение информации о канале
+            channel_info = get_channel_info_fast(channel_url)
+            channel_name = channel_info.get("Название канала") or f"Канал {channel_idx+1}"
             
-            for comment in comments:
-                if 'authorChannelUrl' in comment and comment['authorChannelUrl']:
-                    channel_links.append(comment['authorChannelUrl'])
-        except:
+            # Получаем ссылки на видео с канала
+            try:
+                video_urls = []
+                
+                # Используем быстрый HTTP-метод для получения ссылок на видео
+                logger.info(f"Получение видео с канала {channel_url} быстрым методом")
+                
+                videos_url = channel_url
+                if not "/videos" in videos_url:
+                    if videos_url.endswith("/"):
+                        videos_url = f"{videos_url}videos"
+                    else:
+                        videos_url = f"{videos_url}/videos"
+                
+                # Делаем запрос к странице с видео канала
+                headers = {
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                    "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7"
+                }
+                
+                response = requests.get(videos_url, headers=headers, timeout=10)
+                
+                if response.status_code == 200:
+                    html = response.text
+                    
+                    # Ищем все URL видео на странице
+                    video_matches = re.findall(r'href=\"(/watch\?v=[^\"&]+)', html)
+                    
+                    # Берем только уникальные URL
+                    seen_urls = set()
+                    for match in video_matches:
+                        full_url = f"https://www.youtube.com{match}"
+                        if full_url not in seen_urls:
+                            seen_urls.add(full_url)
+                            video_urls.append(full_url)
+                    
+                    logger.info(f"Найдено {len(video_urls)} видео на странице канала {channel_url}")
+                    
+                    # Если видео не найдены, то пробуем использовать JavaScript-данные
+                    if not video_urls:
+                        logger.info("Пробуем извлечь видео из JavaScript-данных")
+                        
+                        # Ищем videoIds в JavaScript-данных
+                        js_video_matches = re.findall(r'"videoId":"([a-zA-Z0-9_-]{11})"', html)
+                        
+                        # Берем только уникальные videoId
+                        seen_video_ids = set()
+                        for video_id in js_video_matches:
+                            if video_id not in seen_video_ids:
+                                seen_video_ids.add(video_id)
+                                video_urls.append(f"https://www.youtube.com/watch?v={video_id}")
+                        
+                        logger.info(f"Найдено {len(video_urls)} видео в JavaScript-данных")
+                
+                # Ограничиваем количество видео для анализа
+                video_urls = video_urls[:source_videos_limit]
+                
+                # Если не удалось получить видео быстрым способом, используем Selenium
+                if not video_urls:
+                    logger.info(f"Не удалось получить видео быстрым методом, используем Selenium для канала {channel_url}")
+                    if progress_callback:
+                        progress_callback(current_progress, f"Получение видео с канала {channel_name} ({channel_idx+1}/{total_channels})...")
+                    
+                    selenium_videos = analyzer.get_last_videos_from_channel(channel_url, limit=source_videos_limit)
+                    if selenium_videos:
+                        for video in selenium_videos:
+                            if isinstance(video, dict) and "url" in video:
+                                video_urls.append(video["url"])
+                            elif isinstance(video, str):
+                                video_urls.append(video)
+                
+                if not video_urls:
+                    logger.warning(f"Не удалось получить видео с канала {channel_url}")
+                    continue
+                    
+                logger.info(f"Получено {len(video_urls)} видео с канала {channel_url}")
+                
+                # Сохраняем видео с указанием исходного канала
+                for video_url in video_urls:
+                    all_source_videos.append((video_url, channel_url, channel_name))
+                
+                total_source_videos += len(video_urls)
+                
+            except Exception as e:
+                logger.error(f"Ошибка при получении видео с канала {channel_url}: {e}")
+                continue
+                
+        except Exception as e:
+            logger.error(f"Ошибка при получении информации о канале {channel_url}: {e}")
             continue
     
-    # Убираем дубликаты
-    unique_channels = list(set(channel_links))
-    logger.info(f"Найдено {len(unique_channels)} уникальных каналов в комментариях")
+    logger.info(f"Всего собрано {total_source_videos} видео с {total_channels} каналов")
     
-    if not unique_channels:
-        logger.warning("Не найдено ссылок на каналы в комментариях")
-        return pd.DataFrame()
-    
-    # Получаем информацию о каналах
-    channel_data = []
-    
-    with tqdm(total=len(unique_channels), desc="Получение данных каналов") as pbar:
-        for channel_url in unique_channels:
-            try:
-                if use_api:
-                    # Использование API для получения данных о канале
-                    channel_info = fetch_channel_data(channel_url, api_key)
-                    if channel_info:
-                        # Приводим ключи к общему формату
-                        standard_info = {
-                            "Ссылка на канал": channel_info.get("Ссылка на канал"),
-                            "Название канала": channel_info.get("Название канала"),
-                            "Общее число просмотров": channel_info.get("Общее число просмотров"),
-                            "Возраст канала (дней)": channel_info.get("Возраст канала (дней)"),
-                            "Количество видео": channel_info.get("Количество видео"),
-                            "Количество подписчиков": channel_info.get("Количество подписчиков"),
-                            "Страна": channel_info.get("Страна", "Неизвестно"),
-                            "Источник данных": "API"
+    # Этап 2: Сбор рекомендаций для всех видео
+    for video_idx, (video_url, source_channel_url, source_channel_name) in enumerate(all_source_videos):
+        processed_source_videos += 1
+        
+        # Обновляем прогресс
+        if progress_callback:
+            current_progress = 40 + (processed_source_videos / total_source_videos) * 30  # Следующие 30% прогресса на сбор рекомендаций
+            progress_callback(current_progress, f"Анализ рекомендаций для видео {processed_source_videos}/{total_source_videos} с канала {source_channel_name}...")
+        
+        try:
+            # Получаем рекомендации для текущего видео (используем быстрый метод)
+            recommendations = analyzer.get_recommended_videos_fast(video_url, limit=recommendation_limit)
+            
+            if not recommendations:
+                logger.warning(f"Не удалось получить рекомендации для видео {video_url}")
+                continue
+            
+            logger.info(f"Получено {len(recommendations)} рекомендаций для видео {video_url}")
+            
+            # Обрабатываем рекомендации
+            for rec in recommendations:
+                rec_url = rec.get("url") if isinstance(rec, dict) else rec
+                
+                try:
+                    # Получаем данные о видео быстрым методом
+                    rec_video_details = get_video_details_fast(rec_url)
+                    if not rec_video_details:
+                        continue
+                    
+                    # Получаем URL канала
+                    channel_url = rec_video_details.get("channel_url")
+                    if not channel_url:
+                        continue
+                    
+                    # Пропускаем исходные каналы
+                    if any(source_url in channel_url for source_url in channel_urls):
+                        continue
+                    
+                    # Если это новый канал - получаем информацию о нем
+                    if channel_url not in channels_info:
+                        # Получаем информацию о канале быстрым методом
+                        channel_info_data = get_channel_info_fast(channel_url)
+                        
+                        # Вычисляем возраст канала
+                        channel_age = 0
+                        if channel_info_data.get("Возраст канала (дней)"):
+                            channel_age = channel_info_data.get("Возраст канала (дней)")
+                        
+                        # Собираем только необходимые данные о канале
+                        channel_info = {
+                            "Ссылка на канал": channel_url,
+                            "Название канала": channel_info_data.get("Название канала") or rec_video_details.get("channel_name", "Неизвестно"),
+                            "Количество видео": channel_info_data.get("Количество видео", 0),
+                            "Общее число просмотров": channel_info_data.get("Общее число просмотров", 0),
+                            "Возраст канала (дней)": channel_age
                         }
-                        channel_data.append(standard_info)
-                else:
-                    # Использование быстрого метода без API
-                    channel_info = get_channel_info_fast(channel_url)
-                    if channel_info:
-                        channel_info["Источник данных"] = "Web"
-                        channel_data.append(channel_info)
-            except Exception as e:
-                logger.error(f"Ошибка при получении данных канала {channel_url}: {str(e)}")
-            finally:
-                pbar.update(1)
+                        
+                        channels_info[channel_url] = channel_info
+                    
+                except Exception as e:
+                    logger.error(f"Ошибка при обработке рекомендации {rec_url}: {e}")
+                    continue
+                
+        except Exception as e:
+            logger.error(f"Ошибка при получении рекомендаций для видео {video_url}: {e}")
+            continue
     
-    # Создаем DataFrame с каналами
-    if not channel_data:
-        logger.warning("Не удалось получить данные ни для одного канала")
-        return pd.DataFrame()
+    # Этап 3: Фильтрация и форматирование результатов
+    logger.info(f"Найдено {len(channels_info)} уникальных каналов для анализа")
     
-    channels_df = pd.DataFrame(channel_data)
+    # Преобразуем словарь в DataFrame
+    channels_df = pd.DataFrame(list(channels_info.values()))
     
-    # Проверяем наличие обязательных столбцов
-    required_columns = ["Ссылка на канал", "Название канала", "Общее число просмотров", "Возраст канала (дней)"]
-    for col in required_columns:
-        if col not in channels_df.columns:
-            logger.warning(f"Отсутствует столбец {col} в данных каналов")
-            channels_df[col] = "Н/Д" if col in ["Ссылка на канал", "Название канала"] else 0
+    # Отладочный вывод перед фильтрацией
+    if not channels_df.empty:
+        logger.info(f"Перед фильтрацией: {len(channels_df)} каналов")
+        logger.info(f"Минимальное число просмотров для фильтрации: {min_channel_views}")
+        logger.info(f"Максимальный возраст канала для фильтрации: {max_channel_age}")
+        
+        # Выводим данные о каналах для отладки
+        for i, row in channels_df.iterrows():
+            channel_name = row.get("Название канала", "Неизвестно")
+            views = row.get("Общее число просмотров", 0)
+            age = row.get("Возраст канала (дней)", 0)
+            logger.info(f"Канал: {channel_name}, Просмотры: {views}, Возраст: {age}")
+        
+        # Приводим числовые колонки к числовому типу перед фильтрацией
+        for col in ["Общее число просмотров", "Возраст канала (дней)"]:
+            if col in channels_df.columns:
+                # Преобразуем нечисловые значения в 0
+                channels_df[col] = pd.to_numeric(channels_df[col], errors='coerce').fillna(0).astype(int)
+        
+        # Фильтрация по минимальному числу просмотров
+        if min_channel_views > 0:
+            channels_before = len(channels_df)
+            channels_df = channels_df[channels_df["Общее число просмотров"] >= min_channel_views]
+            logger.info(f"После фильтрации по просмотрам: {len(channels_df)} каналов (было {channels_before})")
+        
+        # Фильтрация по максимальному возрасту канала
+        if max_channel_age > 0:
+            channels_before = len(channels_df)
+            channels_df = channels_df[channels_df["Возраст канала (дней)"] <= max_channel_age]
+            logger.info(f"После фильтрации по возрасту: {len(channels_df)} каналов (было {channels_before})")
+        
+        # Форматируем ссылки на каналы для отображения в HTML
+        channels_df["Ссылка на канал"] = channels_df.apply(
+            lambda row: f'<a href="{row["Ссылка на канал"]}" target="_blank">{row["Ссылка на канал"]}</a>',
+            axis=1
+        )
+        
+        # Форматируем числовые данные для удобного отображения
+        channels_df["Общее число просмотров"] = channels_df["Общее число просмотров"].apply(
+            lambda x: f"{int(x):,}".replace(",", " ") if pd.notna(x) else "—"
+        )
+    else:
+        logger.warning("DataFrame каналов пуст, нечего фильтровать")
     
-    # Конвертируем числовые столбцы в числа
-    numeric_columns = ["Общее число просмотров", "Возраст канала (дней)", "Количество видео"]
-    for col in numeric_columns:
-        if col in channels_df.columns:
-            channels_df[col] = pd.to_numeric(channels_df[col], errors='coerce').fillna(0).astype(int)
-    
-    logger.info(f"Получены данные для {len(channels_df)} каналов")
-    
-    # Сохраняем исходное количество каналов
-    total_channels = len(channels_df)
-    
-    # Применяем фильтры
-    
-    # Фильтр по просмотрам
-    if min_views > 0:
-        channels_df = channels_df[channels_df["Общее число просмотров"] >= min_views]
-        logger.info(f"После фильтрации по просмотрам (мин. {min_views}) осталось {len(channels_df)} каналов из {total_channels}")
-    
-    # Фильтр по возрасту канала
-    if max_channel_age:
-        channels_df = channels_df[channels_df["Возраст канала (дней)"] <= max_channel_age]
-        logger.info(f"После фильтрации по возрасту (макс. {max_channel_age} дней) осталось {len(channels_df)} каналов")
-    
-    # Сортируем по количеству просмотров (по убыванию)
-    channels_df = channels_df.sort_values(by="Общее число просмотров", ascending=False)
+    # Обновляем прогресс в конце
+    if progress_callback:
+        progress_callback(100, f"Поиск завершен. Найдено {len(channels_df) if not channels_df.empty else 0} похожих каналов")
     
     return channels_df
 
@@ -2853,6 +2992,134 @@ def fetch_channel_data(channel_id, api_key):
     except Exception as e:
         logger.error(f"Ошибка при получении данных канала через API: {str(e)}")
         return None
+
+def get_video_details_fast(video_url):
+    """
+    Быстрое получение деталей видео через HTTP запрос.
+    
+    Args:
+        video_url (str): URL видео на YouTube
+        
+    Returns:
+        dict: Словарь с информацией о видео или None в случае ошибки
+    """
+    if video_url in video_cache:
+        return video_cache[video_url]
+        
+    try:
+        # Извлекаем ID видео
+        video_id = None
+        if "youtube.com/watch?v=" in video_url:
+            video_id = video_url.split("watch?v=")[1].split("&")[0]
+        elif "youtu.be/" in video_url:
+            video_id = video_url.split("youtu.be/")[1].split("?")[0]
+            
+        if not video_id:
+            return None
+            
+        # Делаем HTTP запрос к странице видео
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7"
+        }
+        
+        response = requests.get(video_url, headers=headers, timeout=10)
+        
+        if response.status_code == 200:
+            html = response.text
+            
+            # Извлекаем название видео
+            title = None
+            title_match = re.search(r'<meta property="og:title" content="([^"]+)"', html)
+            if title_match:
+                title = title_match.group(1)
+            else:
+                title_match = re.search(r'<meta name="title" content="([^"]+)"', html)
+                if title_match:
+                    title = title_match.group(1)
+                    
+            # Извлекаем канал
+            channel_url = None
+            channel_name = None
+            
+            # Ищем URL канала
+            channel_url_match = re.search(r'<link itemprop="url" href="([^"]+)">', html)
+            if channel_url_match:
+                channel_url = channel_url_match.group(1)
+            else:
+                # Альтернативные способы поиска URL канала
+                alt_channel_match = re.search(r'"channelUrl":"([^"]+)"', html)
+                if alt_channel_match:
+                    channel_url = alt_channel_match.group(1).replace("\\/", "/")
+                    if not channel_url.startswith("http"):
+                        channel_url = "https://www.youtube.com" + channel_url
+            
+            # Ищем имя канала
+            channel_name_match = re.search(r'<link itemprop="name" content="([^"]+)">', html)
+            if channel_name_match:
+                channel_name = channel_name_match.group(1)
+            else:
+                alt_name_match = re.search(r'"ownerChannelName":"([^"]+)"', html)
+                if alt_name_match:
+                    channel_name = alt_name_match.group(1)
+                    
+            # Извлекаем количество просмотров
+            views = None
+            views_match = re.search(r'"viewCount":"(\d+)"', html)
+            if views_match:
+                try:
+                    views = int(views_match.group(1))
+                except:
+                    pass
+            else:
+                # Альтернативные способы поиска просмотров
+                alt_views_match = re.search(r'<meta itemprop="interactionCount" content="(\d+)"', html)
+                if alt_views_match:
+                    try:
+                        views = int(alt_views_match.group(1))
+                    except:
+                        pass
+                        
+            # Извлекаем дату публикации
+            publication_date = None
+            date_match = re.search(r'"uploadDate":"([^"]+)"', html)
+            if date_match:
+                try:
+                    date_str = date_match.group(1)
+                    publication_date = datetime.strptime(date_str, "%Y-%m-%d")
+                except:
+                    pass
+            else:
+                # Альтернативные способы поиска даты
+                alt_date_match = re.search(r'<meta itemprop="datePublished" content="([^"]+)"', html)
+                if alt_date_match:
+                    try:
+                        date_str = alt_date_match.group(1)
+                        publication_date = datetime.strptime(date_str.split("T")[0], "%Y-%m-%d")
+                    except:
+                        pass
+            
+            result = {
+                "url": video_url,
+                "title": title or f"Видео {video_id}",
+                "views": views or 0,
+                "publication_date": publication_date,
+                "channel_url": channel_url,
+                "channel_name": channel_name
+            }
+            
+            # Сохраняем в кэш
+            video_cache[video_url] = result
+            return result
+            
+    except Exception as e:
+        logger.error(f"Ошибка при быстром получении информации о видео {video_url}: {e}")
+    
+    return None
+
+# Инициализируем кэш для видео и каналов
+video_cache = {}
+channel_info_cache = {}
 
 if __name__ == "__main__":
     main() 
