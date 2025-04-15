@@ -615,8 +615,9 @@ def process_source_links(links: list,
         progress_bar.progress(1.0)
         status_text.text("Обработка завершена!")
         
-        # Финальное обновление статистики
-        update_stats(force=True)
+        # Финальное обновление статистики больше не нужно, так как вся информация
+        # уже отображена для каждого канала/видео
+        # update_stats(force=True, source_videos_count=len(source_videos), recommendations_count=len(results) - len(source_videos))
         
         # Закрываем драйвер
         try:
@@ -1044,8 +1045,9 @@ def test_recommendations(source_links: List[str],
         update_interval = 5.0  # Увеличиваем интервал между обновлениями статистики до 5 секунд
         last_processed_videos = 0
         last_added_videos = 0
+        link_stats = {}  # Словарь для хранения статистики по каждой ссылке
         
-        def update_stats(force=False):
+        def update_stats(force=False, current_link=None, source_videos_count=0, recommendations_count=0):
             nonlocal last_update_time, last_processed_videos, last_added_videos
             current_time = time.time()
             
@@ -1069,14 +1071,27 @@ def test_recommendations(source_links: List[str],
             
             # Обновляем отображение статистики
             with stats_container:
-                st.markdown(f"""
-                **Статистика обработки:**
-                - Обработано ссылок: {stats['processed_links']}/{len(valid_links)}
-                - Обработано видео: {stats['processed_videos']}
-                - Добавлено видео: {stats['added_videos']}
-                - Пропущено по критериям: {stats['skipped_views'] + stats['skipped_date']}
-                - Время выполнения: {time_elapsed:.1f} сек
-                """)
+                if current_link:
+                    # Если передана текущая ссылка, записываем статистику для неё
+                    if current_link not in link_stats:
+                        link_stats[current_link] = {
+                            "source_videos": source_videos_count,
+                            "recommendations": recommendations_count
+                        }
+                    else:
+                        # Обновляем только если переданы ненулевые значения
+                        if source_videos_count > 0:
+                            link_stats[current_link]["source_videos"] = source_videos_count
+                        if recommendations_count > 0:
+                            link_stats[current_link]["recommendations"] = recommendations_count
+                    
+                    st.markdown(f"При обработке строки {current_link} добавлено в результаты {link_stats[current_link]['source_videos']} видео с канала/источника и {link_stats[current_link]['recommendations']} видео с рекомендаций.")
+                else:
+                    # Если ссылка не передана, но это принудительное обновление, показываем последнюю обработанную ссылку
+                    if force and stats['processed_links'] > 0 and stats['processed_links'] <= len(valid_links):
+                        last_link = valid_links[stats['processed_links']-1]
+                        if last_link in link_stats:
+                            st.markdown(f"При обработке строки {last_link} добавлено в результаты {link_stats[last_link]['source_videos']} видео с канала/источника и {link_stats[last_link]['recommendations']} видео с рекомендаций.")
             
             # Обновляем статистику о времени выполнения
             update_timing_stats()
@@ -1131,6 +1146,11 @@ def test_recommendations(source_links: List[str],
             
             # Проверяем тип ссылки (канал или видео)
             url, is_channel = parse_youtube_url(link)
+            
+            # Запоминаем текущее количество видео из источников перед обработкой нового канала/видео
+            source_videos_before = len(source_videos)
+            # Запоминаем текущее количество рекомендаций
+            recommendations_before = len(all_recommendations)
             
             if is_channel:
                 # Для канала получаем последние видео (используем channel_videos_limit)
@@ -1213,7 +1233,10 @@ def test_recommendations(source_links: List[str],
                     # update_stats()
                 
                 # Обновляем статистику принудительно после обработки всех видео с канала
-                update_stats(force=True)
+                # Передаем только видео и рекомендации с текущего канала, а не общее количество
+                current_source_videos = len(source_videos) - source_videos_before
+                current_recommendations = len(all_recommendations) - recommendations_before
+                update_stats(force=True, current_link=url, source_videos_count=current_source_videos, recommendations_count=current_recommendations)
             else:
                 # Для прямой ссылки на видео
                 status_text.text(f"Получение деталей видео: {url}")
@@ -1274,6 +1297,12 @@ def test_recommendations(source_links: List[str],
                 
                 # Временно отключаем обновление статистики для прямой ссылки
                 # update_stats()
+                
+                # Обновляем статистику по завершению обработки видео
+                # Передаем только видео и рекомендации с текущего видео, а не общее количество
+                current_source_videos = len(source_videos) - source_videos_before
+                current_recommendations = len(all_recommendations) - recommendations_before
+                update_stats(force=True, current_link=url, source_videos_count=current_source_videos, recommendations_count=current_recommendations)
         
         # Обработка собранных рекомендаций
         status_text.text(f"Обработка {len(all_recommendations)} рекомендаций...")
@@ -1371,7 +1400,7 @@ def test_recommendations(source_links: List[str],
             
             # Обновляем статистику после обработки пакета рекомендаций
             # Используем обновление только по завершении пакета, а не на каждой итерации
-            update_stats()
+            # update_stats(force=False, recommendations_count=added_recommendations)
         
         # Добавляем исходные видео к результатам
         # Важно: сначала добавляем исходные видео, чтобы они не были удалены как дубликаты
@@ -1381,8 +1410,9 @@ def test_recommendations(source_links: List[str],
         progress_bar.progress(1.0)
         status_text.text("Обработка завершена!")
         
-        # Финальное обновление статистики
-        update_stats(force=True)
+        # Финальное обновление статистики больше не нужно, так как вся информация
+        # уже отображена для каждого канала/видео
+        # update_stats(force=True, source_videos_count=len(source_videos), recommendations_count=len(results) - len(source_videos))
         
     except Exception as e:
         status_text.error(f"Произошла ошибка: {e}")
