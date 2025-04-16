@@ -1675,7 +1675,7 @@ def main():
                         with st.spinner("Выполняется авторизация в Google..."):
                             # Создаем анализатор YouTube только для авторизации
                             auth_analyzer = YouTubeAnalyzer(
-                                headless=False,  # Используем видимый режим для удобства пользователя
+                                headless=True,  # Используем невидимый режим (headless) для скрытия браузера
                                 use_proxy=use_proxy,
                                 google_account=google_account
                             )
@@ -1832,10 +1832,9 @@ def main():
                                     
                                     if existing_analyzer and existing_analyzer.driver:
                                         # Используем существующий драйвер для просмотра
-                                        prewatch_status.info(f"⏳ Запуск браузера в видимом режиме для просмотра {len(valid_links[:total_videos])} видео...")
+                                        prewatch_status.info(f"⏳ Запуск автоматического просмотра {len(valid_links[:total_videos])} видео...")
                                         
-                                        # Принудительно устанавливаем видимый режим
-                                        existing_analyzer.headless = False
+                                        # Не меняем режим headless, используем текущее значение
                                         
                                         existing_analyzer.prewatch_videos(
                                             valid_links[:total_videos],
@@ -4117,47 +4116,6 @@ def render_api_tester_section():
         
         # Отображаем таблицу
         st.write(results_df[display_columns].to_html(escape=False), unsafe_allow_html=True)
-        
-        # Добавляем статистику
-        with st.expander("Статистика по каналам", expanded=False):
-            # Собираем статистику по числовым данным
-            numeric_df = results_df.copy()
-            
-            # Преобразуем отформатированные числа обратно в числовые для расчетов
-            for col in ["Общее число просмотров", "Количество подписчиков", "Количество видео"]:
-                if col in numeric_df.columns:
-                    numeric_df[col] = pd.to_numeric(numeric_df[col].str.replace(" ", ""), errors="coerce")
-            
-            # Общие показатели
-            total_views = numeric_df["Общее число просмотров"].sum()
-            total_subs = numeric_df["Количество подписчиков"].sum()
-            total_videos = numeric_df["Количество видео"].sum()
-            
-            # Отображаем общие показатели
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.metric("Общее число просмотров", f"{int(total_views):,}".replace(",", " "))
-            with col2:
-                st.metric("Общее число подписчиков", f"{int(total_subs):,}".replace(",", " "))
-            with col3:
-                st.metric("Общее число видео", f"{int(total_videos):,}".replace(",", " "))
-            
-            # Средние показатели
-            avg_views = numeric_df["Общее число просмотров"].mean()
-            avg_subs = numeric_df["Количество подписчиков"].mean()
-            avg_videos = numeric_df["Количество видео"].mean()
-            avg_age = numeric_df["Возраст канала (дней)"].mean()
-            
-            # Отображаем средние показатели
-            col1, col2, col3, col4 = st.columns(4)
-            with col1:
-                st.metric("Среднее число просмотров", f"{int(avg_views):,}".replace(",", " "))
-            with col2:
-                st.metric("Среднее число подписчиков", f"{int(avg_subs):,}".replace(",", " "))
-            with col3:
-                st.metric("Среднее число видео", f"{int(avg_videos):,}".replace(",", " "))
-            with col4:
-                st.metric("Средний возраст канала", f"{int(avg_age)} дней")
         
         # Создаем копию dataframe для экспорта без форматирования
         export_df = results_df.copy()
