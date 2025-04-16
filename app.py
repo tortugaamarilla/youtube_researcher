@@ -4159,14 +4159,67 @@ def render_api_tester_section():
             with col4:
                 st.metric("Средний возраст канала", f"{int(avg_age)} дней")
         
-        # Добавляем кнопку для скачивания результатов
-        csv = results_df.to_csv(index=False).encode('utf-8')
-        st.download_button(
-            label="Скачать результаты как CSV",
-            data=csv,
-            file_name="youtube_channels_api_test.csv",
-            mime="text/csv",
-        )
+        # Создаем копию dataframe для экспорта без форматирования
+        export_df = results_df.copy()
+        
+        # Для экспорта подготавливаем данные без форматирования
+        if "Общее число просмотров" in export_df.columns:
+            export_df["Общее число просмотров"] = pd.to_numeric(export_df["Общее число просмотров"].str.replace(" ", ""), errors="coerce")
+        
+        if "Количество подписчиков" in export_df.columns:
+            export_df["Количество подписчиков"] = pd.to_numeric(export_df["Количество подписчиков"].str.replace(" ", ""), errors="coerce")
+        
+        if "Количество видео" in export_df.columns:
+            export_df["Количество видео"] = pd.to_numeric(export_df["Количество видео"].str.replace(" ", ""), errors="coerce")
+            
+        # Обработка стран - перевод на английский для более универсального формата
+        country_mapping = {
+            "Неизвестно": "Unknown",
+            "Россия": "Russia",
+            "США": "United States",
+            "Украина": "Ukraine",
+            "Германия": "Germany",
+            "Великобритания": "United Kingdom",
+            "Франция": "France",
+            "Канада": "Canada",
+            "Австралия": "Australia",
+            "Испания": "Spain",
+            "Италия": "Italy",
+            "Китай": "China",
+            "Япония": "Japan",
+            "Индия": "India",
+            "Бразилия": "Brazil"
+        }
+        
+        if "Страна" in export_df.columns:
+            export_df["Страна"] = export_df["Страна"].map(lambda x: country_mapping.get(x, x))
+        
+        # Восстанавливаем колонку "Ссылка на канал" для экспорта
+        if "URL канала" in export_df.columns:
+            export_df["Ссылка на канал"] = export_df["URL канала"]
+            
+        # Добавляем кнопки для скачивания результатов в разных форматах
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            # Кнопка для скачивания CSV
+            csv = export_df.to_csv(index=False).encode('utf-8')
+            st.download_button(
+                label="📄 Скачать CSV файл",
+                data=csv,
+                file_name="youtube_channels_api_test.csv",
+                mime="text/csv",
+            )
+            
+        with col2:
+            # Кнопка для скачивания TSV
+            tsv = export_df.to_csv(index=False, sep='\t').encode('utf-8')
+            st.download_button(
+                label="📊 Скачать TSV файл",
+                data=tsv,
+                file_name="youtube_channels_api_test.tsv",
+                mime="text/tab-separated-values",
+            )
 
 if __name__ == "__main__":
     main() 
