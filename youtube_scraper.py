@@ -1785,81 +1785,134 @@ class YouTubeAnalyzer:
         Извлекает ID канала из URL.
         
         Args:
-            channel_url (str): URL канала YouTube.
+            channel_url (str): URL канала YouTube
             
         Returns:
-            Optional[str]: ID канала или None, если не удалось извлечь.
+            Optional[str]: ID канала или None, если не удалось извлечь
         """
         try:
-            # Проверяем, инициализирован ли драйвер
-            if self.driver is None:
-                try:
-                    logger.info("Драйвер не инициализирован, пытаемся инициализировать в _extract_channel_id")
-                    self.setup_driver()
-                    # Проверяем еще раз после инициализации
-                    if self.driver is None:
-                        logger.error("Не удалось инициализировать драйвер в _extract_channel_id")
-                        return None
-                except Exception as e:
-                    logger.error(f"Ошибка при инициализации драйвера в _extract_channel_id: {e}")
-                    return None
+            logger.info(f"Извлечение ID канала из URL: {channel_url}")
             
-            # Шаблоны регулярных выражений для извлечения ID канала
-            patterns = [
-                r'youtube\.com/channel/([^/\?]+)',  # Стандартный формат канала
-                r'youtube\.com/c/([^/\?]+)',        # Старый формат канала
-                r'youtube\.com/@([^/\?]+)'          # Новый формат с @
-            ]
-            
-            # Проверяем соответствие URL шаблонам
-            for pattern in patterns:
-                match = re.search(pattern, channel_url)
-                if match:
-                    channel_id = match.group(1)
-                    logger.info(f"Извлечен ID канала из URL: {channel_id}")
-                    return channel_id
-                    
-            # Если не удалось извлечь ID из URL, пробуем загрузить страницу канала
-            # и получить ID из метаданных
-            try:
-                logger.info(f"Пробуем извлечь ID канала через загрузку страницы: {channel_url}")
-                self.driver.get(channel_url)
-                self._random_sleep(2.0, 3.0)
-                
-                # Получаем ID канала из метатегов или данных страницы
-                channel_id = None
-                
-                # Метод 1: из метатегов
-                try:
-                    meta_tags = self.driver.find_elements(By.XPATH, "//meta[contains(@itemprop, 'channelId')]")
-                    if meta_tags:
-                        channel_id = meta_tags[0].get_attribute("content")
-                except:
-                    pass
-                    
-                # Метод 2: из данных страницы через JavaScript
-                if not channel_id:
-                    try:
-                        channel_id = self.driver.execute_script("""
-                            var ytInitialData = window.ytInitialData || {};
-                            if (ytInitialData.header && ytInitialData.header.c4TabbedHeaderRenderer) {
-                                return ytInitialData.header.c4TabbedHeaderRenderer.channelId;
-                            }
-                            return null;
-                        """)
-                    except:
-                        pass
-                
-                if channel_id:
-                    logger.info(f"Извлечен ID канала из страницы: {channel_id}")
-                    return channel_id
-                else:
-                    logger.warning(f"Не удалось извлечь ID канала из страницы")
-                    return None
-                    
-            except Exception as e:
-                logger.error(f"Ошибка при извлечении ID канала через загрузку страницы: {e}")
+            # Проверяем, что URL не пустой
+            if not channel_url:
+                logger.warning("URL канала пустой")
                 return None
+            
+            # Нормализуем URL (добавляем https:// если отсутствует)
+            if not channel_url.startswith(('http://', 'https://')):
+                channel_url = f"https://{channel_url}"
+            
+            # Формат URL для каналов с ID
+            channel_id_pattern = r'youtube\.com/channel/([^/?&]+)'
+            channel_id_match = re.search(channel_id_pattern, channel_url)
+            
+            if channel_id_match:
+                channel_id = channel_id_match.group(1)
+                logger.info(f"Найден ID канала в стандартном формате: {channel_id}")
+                return channel_id
+            
+            # Формат URL для каналов с пользовательским именем (@username)
+            username_pattern = r'youtube\.com/@([^/?&]+)'
+            username_match = re.search(username_pattern, channel_url)
+            
+            if username_match:
+                username = username_match.group(1)
+                logger.info(f"Найдено пользовательское имя канала: @{username}")
+                
+                # Поскольку мы не можем напрямую получить ID канала из @username,
+                # нам нужно использовать API для поиска канала
+                if hasattr(st, 'secrets') and 'youtube' in st.secrets and 'api_key' in st.secrets['youtube']:
+                    api_key = st.secrets['youtube']['api_key']
+                    logger.info(f"Попытка получить ID канала через API для @{username}")
+                    
+                    search_url = "https://www.googleapis.com/youtube/v3/search"
+                    search_params = {
+                        'part': 'snippet',
+                        'q': f"@{username}",
+                        'type': 'channel',
+                        'maxResults': 1,
+                        'key': api_key
+                    }
+                    
+                    try:
+                        search_response = requests.get(search_url, params=search_params)
+                        
+                        if search_response.status_code == 200:
+                            search_data = search_response.json()
+                            if search_data.get('items') and len(search_data['items']) > 0:
+                                found_channel_id = search_data['items'][0]['id']['channelId']
+                                logger.info(f"Получен ID канала через API: {found_channel_id}")
+                                return found_channel_id
+                        else:
+                            logger.warning(f"Ошибка API при поиске ID канала: {search_response.status_code}")
+                    except Exception as e:
+                        logger.error(f"Ошибка при получении ID канала через API: {e}")
+            
+            # Формат URL для пользовательских URL (c или user)
+            user_pattern = r'youtube\.com/(c|user)/([^/?&]+)'
+            user_match = re.search(user_pattern, channel_url)
+            
+            if user_match:
+                user_type = user_match.group(1)  # c или user
+                username = user_match.group(2)
+                logger.info(f"Найден формат URL канала: {user_type}/{username}")
+                
+                # Используем API для получения ID канала
+                if hasattr(st, 'secrets') and 'youtube' in st.secrets and 'api_key' in st.secrets['youtube']:
+                    api_key = st.secrets['youtube']['api_key']
+                    logger.info(f"Попытка получить ID канала через API для {user_type}/{username}")
+                    
+                    search_url = "https://www.googleapis.com/youtube/v3/search"
+                    search_params = {
+                        'part': 'snippet',
+                        'q': username,
+                        'type': 'channel',
+                        'maxResults': 1,
+                        'key': api_key
+                    }
+                    
+                    try:
+                        search_response = requests.get(search_url, params=search_params)
+                        
+                        if search_response.status_code == 200:
+                            search_data = search_response.json()
+                            if search_data.get('items') and len(search_data['items']) > 0:
+                                found_channel_id = search_data['items'][0]['id']['channelId']
+                                logger.info(f"Получен ID канала через API: {found_channel_id}")
+                                return found_channel_id
+                        else:
+                            logger.warning(f"Ошибка API при поиске ID канала: {search_response.status_code}")
+                    except Exception as e:
+                        logger.error(f"Ошибка при получении ID канала через API: {e}")
+            
+            # Если ни один метод не сработал, пробуем прямой запрос через API с использованием URL как запроса
+            if hasattr(st, 'secrets') and 'youtube' in st.secrets and 'api_key' in st.secrets['youtube']:
+                api_key = st.secrets['youtube']['api_key']
+                logger.info(f"Попытка получить ID канала через API по прямому запросу: {channel_url}")
+                
+                search_url = "https://www.googleapis.com/youtube/v3/search"
+                search_params = {
+                    'part': 'snippet',
+                    'q': channel_url,
+                    'type': 'channel',
+                    'maxResults': 1,
+                    'key': api_key
+                }
+                
+                try:
+                    search_response = requests.get(search_url, params=search_params)
+                    
+                    if search_response.status_code == 200:
+                        search_data = search_response.json()
+                        if search_data.get('items') and len(search_data['items']) > 0:
+                            found_channel_id = search_data['items'][0]['id']['channelId']
+                            logger.info(f"Получен ID канала через API по прямому запросу: {found_channel_id}")
+                            return found_channel_id
+                except Exception as e:
+                    logger.error(f"Ошибка при получении ID канала через API по прямому запросу: {e}")
+            
+            logger.warning(f"Не удалось извлечь ID канала из URL: {channel_url}")
+            return None
                 
         except Exception as e:
             logger.error(f"Ошибка при извлечении ID канала: {e}")
@@ -1899,6 +1952,113 @@ class YouTubeAnalyzer:
                 logger.error(f"Ошибка при настройке прокси: {e}")
                 # Продолжаем без прокси в случае ошибки
                 self.current_proxy = None
+
+    def _get_channel_details_api(self, channel_id: str, api_key: str) -> Optional[Dict[str, Any]]:
+        """
+        Получает детальную информацию о канале через API.
+        
+        Args:
+            channel_id (str): ID канала
+            api_key (str): Ключ API YouTube
+            
+        Returns:
+            Optional[Dict[str, Any]]: Словарь с информацией о канале или None в случае ошибки
+        """
+        try:
+            base_url = "https://www.googleapis.com/youtube/v3/channels"
+            params = {
+                'part': 'snippet,statistics,contentDetails',
+                'id': channel_id,
+                'key': api_key
+            }
+            
+            logger.info(f"Запрос деталей канала {channel_id}: {base_url} с параметрами {params}")
+            response = requests.get(base_url, params=params)
+            
+            if response.status_code != 200:
+                logger.warning(f"Ошибка API при получении деталей канала: {response.status_code}")
+                logger.warning(f"Ответ API: {response.text}")
+                return None
+                
+            data = response.json()
+            
+            if not data.get('items'):
+                logger.warning(f"API не вернул данные для канала {channel_id}")
+                return None
+                
+            channel_info = data['items'][0]
+            snippet = channel_info.get('snippet', {})
+            statistics = channel_info.get('statistics', {})
+            
+            # Расчет возраста канала
+            published_at = snippet.get('publishedAt')
+            channel_age_days = 0
+            
+            if published_at:
+                try:
+                    # Обработка формата даты с микросекундами (например 2025-02-17T13:42:15.172022Z)
+                    if '.' in published_at:
+                        # Если есть микросекунды, отрезаем их до точки и добавляем Z
+                        date_part = published_at.split('.')[0]
+                        published_date = datetime.strptime(date_part + 'Z', "%Y-%m-%dT%H:%M:%SZ")
+                    else:
+                        # Для формата без микросекунд
+                        published_date = datetime.strptime(published_at, "%Y-%m-%dT%H:%M:%SZ")
+                    
+                    channel_age_days = (datetime.now() - published_date).days
+                except ValueError as e:
+                    logger.warning(f"Не удалось обработать дату публикации канала: {published_at}, ошибка: {e}")
+                    # Пробуем другой подход к парсингу даты - через регулярное выражение
+                    try:
+                        import re
+                        date_match = re.match(r'(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2}:\d{2})', published_at)
+                        if date_match:
+                            date_str = f"{date_match.group(1)} {date_match.group(2)}"
+                            published_date = datetime.strptime(date_str, "%Y-%m-%d %H:%M:%S")
+                            channel_age_days = (datetime.now() - published_date).days
+                    except Exception as e2:
+                        logger.error(f"Не удалось обработать дату альтернативным способом: {e2}")
+            
+            # Формируем результат
+            subscriber_count = 0
+            try:
+                subscriber_count = int(statistics.get('subscriberCount', 0))
+            except (ValueError, TypeError):
+                logger.warning(f"Не удалось преобразовать subscriberCount в число: {statistics.get('subscriberCount')}")
+            
+            video_count = 0
+            try:
+                video_count = int(statistics.get('videoCount', 0))
+            except (ValueError, TypeError):
+                logger.warning(f"Не удалось преобразовать videoCount в число: {statistics.get('videoCount')}")
+            
+            view_count = 0
+            try:
+                view_count = int(statistics.get('viewCount', 0))
+            except (ValueError, TypeError):
+                logger.warning(f"Не удалось преобразовать viewCount в число: {statistics.get('viewCount')}")
+            
+            result = {
+                "id": channel_id,
+                "url": f"https://www.youtube.com/channel/{channel_id}",
+                "title": snippet.get('title', 'Неизвестно'),
+                "description": snippet.get('description', ''),
+                "country": snippet.get('country', 'Неизвестно'),
+                "thumbnail": snippet.get('thumbnails', {}).get('high', {}).get('url', ''),
+                "subscriber_count": subscriber_count,
+                "video_count": video_count,
+                "view_count": view_count,
+                "published_at": published_at,
+                "channel_age_days": channel_age_days
+            }
+            
+            logger.info(f"Получены детали канала: {result['title']}, подписчиков: {result['subscriber_count']}, просмотров: {result['view_count']}")
+            return result
+            
+        except Exception as e:
+            logger.error(f"Ошибка при получении деталей канала {channel_id} через API: {str(e)}")
+            logger.error(traceback.format_exc())
+            return None
 
     def login_to_google(self) -> bool:
         """

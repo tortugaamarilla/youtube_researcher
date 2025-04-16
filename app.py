@@ -26,6 +26,39 @@ logging.basicConfig(level=logging.INFO,
                     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
+# Инициализация логгера
+logger = logging.getLogger("youtube_analyzer")
+
+# Функция для загрузки API ключа из secrets.toml
+def load_api_key_from_secrets():
+    """
+    Загружает YouTube API ключ из файла secrets.toml
+    
+    Returns:
+        str: YouTube API ключ или None, если ключ не найден
+    """
+    try:
+        # Streamlit автоматически загружает secrets.toml в st.secrets
+        if hasattr(st, 'secrets') and 'youtube' in st.secrets and 'api_key' in st.secrets['youtube']:
+            api_key = st.secrets['youtube']['api_key']
+            
+            # Проверяем, что ключ не является значением по умолчанию
+            if api_key != "ВАШЕ_ЗНАЧЕНИЕ_КЛЮЧА_API_YOUTUBE":
+                logger.info("YouTube API ключ успешно загружен из secrets.toml")
+                return api_key
+            else:
+                logger.warning("Найден YouTube API ключ по умолчанию, требуется замена на реальный")
+                return None
+        else:
+            logger.warning("Секция youtube.api_key не найдена в secrets.toml")
+            return None
+    except Exception as e:
+        logger.error(f"Ошибка при загрузке YouTube API ключа из secrets: {str(e)}")
+        return None
+
+# Глобальная переменная для хранения результатов поиска похожих каналов
+similar_channels_df = None
+
 # Функция для настройки логирования
 def setup_logging():
     """
@@ -65,10 +98,10 @@ def setup_logging():
     
     logger.info("Логирование настроено успешно")
 
-# Настройка страницы Streamlit
+# Настройка страницы Streamlit (должно быть первой командой)
 st.set_page_config(
     page_title="YouTube Researcher",
-    page_icon="🎬",
+    page_icon="🎥",
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -1479,6 +1512,13 @@ def test_recommendations(source_links: List[str],
                 df["Канал"] = df["Канал"].apply(
                     lambda x: f'<a href="{x}" target="_blank">{x}</a>' if isinstance(x, str) and x else x
                 )
+                
+                # Сохраняем URL канала, если колонка существует
+                if "Канал" in df.columns and "channel_url" not in df.columns:
+                    df["URL канала"] = df["Канал"]
+            
+            # Удаляем ненужные строки, вызывающие ошибку
+            # Колонки Ссылка на канал и Название канала не существуют в этом контексте
             
             return df
         else:
@@ -1489,6 +1529,13 @@ def test_recommendations(source_links: List[str],
 def main():
     # Настройка логгера
     setup_logging()
+    
+    # Загружаем API ключ из secrets
+    api_key = load_api_key_from_secrets()
+    if api_key:
+        st.session_state["youtube_api_key"] = api_key
+        logger.info("YouTube API ключ загружен в сессию")
+    
     st.title("YouTube Researcher 🎬")
 
     # Боковая панель с настройками
@@ -1564,7 +1611,7 @@ def main():
                                     proxy_list = []
         
     # Основное содержимое
-    tab1, tab2, tab3, tab4, tab5 = st.tabs(["Получение рекомендаций", "Релевантность", "Результаты", "Тестирование параметров", "Поиск похожих каналов"])
+    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["Получение рекомендаций", "Релевантность", "Результаты", "Тестирование параметров", "Поиск похожих каналов", "Тест API каналов"])
     
     with tab1:
         # Стадия 1: Авторизация Google и настройка предварительного просмотра
@@ -2004,6 +2051,10 @@ def main():
     with tab5:
         # Раздел для поиска похожих каналов
         render_similar_channels_section()
+    
+    with tab6:
+        # Раздел для тестирования API каналов
+        render_api_tester_section()
 
 # Функция для отображения раздела тестирования параметров видео
 def render_video_tester_section():
@@ -2231,7 +2282,7 @@ def display_results_tab3():
     href = f'<div style="text-align: right; margin: 10px 0;"><a href="data:file/csv;base64,{b64}" download="youtube_final_results.tsv" style="background-color: #4CAF50; color: white; padding: 8px 16px; text-decoration: none; border-radius: 4px;">📊 Скачать TSV файл</a></div>'
     st.markdown(href, unsafe_allow_html=True)
 
-# Функция для отображения раздела поиска похожих каналов
+# Функция для отображения раздела поиска похожих каналов через рекомендации YouTube.
 def render_similar_channels_section():
     """
     Отображает раздел поиска похожих каналов через рекомендации YouTube.
@@ -2255,38 +2306,78 @@ def render_similar_channels_section():
         - Определить потенциальных конкурентов или партнеров
         """)
     
+    # Добавляем уведомление о возможных проблемах с доступом к данным каналов
+    with st.expander("Важная информация о доступе к данным каналов", expanded=True):
+        st.warning("⚠️ **Информация о блокировке доступа к каналам**")
+        st.markdown("""
+        YouTube может блокировать доступ к информации о каналах в следующих случаях:
+        1. Требуется вход в аккаунт для просмотра контента
+        2. Показывается страница "Прежде чем перейти к YouTube" с требованием принять соглашение
+        3. IP-адрес обнаружен как автоматизированный запрос
+        
+        **Решения:**
+        - YouTube API ключ используется автоматически если он настроен в файле .streamlit/secrets.toml
+        - Используйте авторизацию в Google аккаунте
+        - Выполняйте небольшое количество запросов за сеанс
+        
+        Если параметры каналов отображаются как нули или значение "Недоступно", попробуйте эти методы.
+        """)
+        
+        # Показываем статус API ключа
+        if st.session_state.get("youtube_api_key"):
+            st.success("✅ YouTube API ключ загружен и готов к использованию")
+        else:
+            st.error("❌ YouTube API ключ не настроен. Добавьте его в файл .streamlit/secrets.toml для улучшенного поиска каналов")
+            with st.expander("Как настроить API ключ"):
+                st.markdown("""
+                1. Создайте файл `.streamlit/secrets.toml` со следующим содержимым:
+                ```toml
+                [youtube]
+                api_key = "ВАШ_КЛЮЧ_API_YOUTUBE"
+                ```
+                
+                2. Получите API ключ на странице: https://console.cloud.google.com/apis/credentials
+                3. Активируйте YouTube Data API v3 в Google Cloud Console
+                4. Перезапустите приложение
+                """)
+    
     # Параметры сбора данных
     with st.expander("Параметры сбора данных", expanded=True):
         col1, col2 = st.columns(2)
         
         with col1:
             source_videos_limit = st.number_input(
-                "Количество видео с исходного канала", 
-                min_value=1, 
-                max_value=100, 
-                value=30,
-                help="Количество последних видео, которые будут проанализированы с каждого исходного канала"
+                "Количество видео с исходного канала",
+                min_value=1,
+                max_value=50,
+                value=10,
+                step=1,
+                help="Сколько последних видео брать с каждого канала для анализа"
             )
             
             max_channel_age = st.number_input(
-                "Максимальный возраст канала (дней)", 
-                min_value=0, 
+                "Максимальный возраст канала (дней)",
+                min_value=0,
+                max_value=5000,
                 value=0,
-                help="0 = без ограничений"
+                step=100,
+                help="0 = без ограничений, любой возраст канала"
             )
-        
+            
         with col2:
             recommendation_limit = st.number_input(
-                "Количество рекомендаций для каждого видео", 
-                min_value=1, 
-                max_value=100, 
+                "Количество рекомендаций для каждого видео",
+                min_value=5,
+                max_value=50,
                 value=30,
-                help="Количество рекомендуемых видео, которые будут собраны для каждого видео с исходного канала"
+                step=5,
+                help="Сколько рекомендованных видео анализировать для каждого исходного видео"
             )
             
             min_channel_views = st.number_input(
-                "Минимальное общее число просмотров на канале", 
-                min_value=0, 
+                "Минимальное количество просмотров канала",
+                min_value=0,
+                max_value=10000000,
                 value=50000,
                 step=10000,
                 help="Минимальное количество просмотров для отображения канала в результатах"
@@ -2343,97 +2434,137 @@ def render_similar_channels_section():
             st.error("Пожалуйста, введите хотя бы один URL канала YouTube.")
             return
         
-        # Проверяем формат URL
-        invalid_urls = []
-        valid_urls = []
+        # Создаем прогресс-бар и сообщение о статусе
+        progress_bar = st.progress(0)
+        status_message = st.empty()
         
-        for url in channel_urls:
-            if "youtube.com/channel/" in url or "youtube.com/c/" in url or "youtube.com/@" in url:
-                valid_urls.append(url)
+        # Функция для обновления прогресса и сообщения
+        def update_search_progress(progress, message):
+            update_progress(progress_bar, status_message, progress, message)
+        
+        # Инициализируем и получаем существующий экземпляр анализатора, если он уже создан
+        existing_analyzer = None
+        if st.session_state.get("is_logged_in") and hasattr(st.session_state, "youtube_analyzer"):
+            existing_analyzer = st.session_state.get("youtube_analyzer")
+            
+            # Проверяем, не закрыт ли драйвер
+            if existing_analyzer and existing_analyzer.driver:
+                try:
+                    # Проверим, что драйвер все еще работает
+                    existing_analyzer.driver.current_url
+                except:
+                    # Если возникает ошибка, значит драйвер закрыт
+                    existing_analyzer = None
+        
+        if existing_analyzer:
+            update_search_progress(5, "Используем существующую сессию для поиска...")
+        else:
+            update_search_progress(5, "Инициализация YouTube анализатора...")
+        
+        # Запускаем поиск с замером времени
+        start_time = time.time()
+        
+        # Необходим try/except, чтобы гарантировать закрытие драйвера
+        try:
+            # Используем существующий экземпляр или создаем новый
+            if existing_analyzer:
+                analyzer = existing_analyzer
             else:
-                invalid_urls.append(url)
-        
-        if invalid_urls:
-            st.error(f"Следующие URL имеют неверный формат:\n" + "\n".join(invalid_urls))
-            return
-        
-        # Запускаем сбор данных с индикатором прогресса
-        with st.spinner("Поиск похожих каналов..."):
-            progress_bar = st.progress(0)
-            status_message = st.empty()
-            
-            # Засекаем время выполнения
-            start_time = time.time()
-            
-            try:
-                # Инициализируем YouTube анализатор
-                status_message.info("Инициализация YouTube Analyzer...")
-                
-                # Проверяем наличие существующего анализатора с активной сессией
-                existing_analyzer = st.session_state.get("auth_analyzer")
-                
-                if is_already_logged_in and existing_analyzer and existing_analyzer.driver:
-                    status_message.info(f"Используем существующую сессию авторизации Google ({st.session_state.get('google_account', {}).get('email', '')})")
-                    analyzer = existing_analyzer
-                else:
-                    # Создаем новый анализатор YouTube
-                    analyzer = YouTubeAnalyzer(headless=True, use_proxy=False, google_account=google_account)
-                    
-                    # Если указан аккаунт Google, выполняем вход
-                    if google_account:
-                        status_message.info("Выполняется вход в аккаунт Google...")
-                        login_success = analyzer.login_to_google()
-                        if login_success:
-                            status_message.success("Вход в аккаунт Google выполнен успешно")
-                            # Сохраняем данные авторизации в session_state
-                            st.session_state.google_account = google_account
-                            st.session_state.is_logged_in = True
-                            st.session_state.auth_analyzer = analyzer
-                        else:
-                            status_message.warning("Не удалось войти в аккаунт Google. Продолжаем без авторизации.")
-                
-                # Собираем данные о похожих каналах
-                similar_channels = find_similar_channels(
-                    analyzer=analyzer,
-                    channel_urls=valid_urls,
-                    source_videos_limit=source_videos_limit,
-                    recommendation_limit=recommendation_limit,
-                    min_channel_views=min_channel_views,
-                    max_channel_age=max_channel_age,
-                    progress_callback=lambda progress, message: update_progress(progress_bar, status_message, progress, message)
+                # Создаем анализатор
+                analyzer = YouTubeAnalyzer(
+                    headless=True, 
+                    use_proxy=True, 
+                    google_account=google_account
                 )
                 
-                # Закрываем драйвер только если это новый драйвер, не используемый в других вкладках
-                if not (is_already_logged_in and analyzer == existing_analyzer):
-                    analyzer.quit_driver()
-                
-                # Вычисляем время выполнения
-                elapsed_time = time.time() - start_time
-                
-                # Обновляем прогресс-бар до 100%
-                progress_bar.progress(1.0)
-                
-                # Отображаем результаты
-                if similar_channels is not None and not similar_channels.empty:
-                    status_message.success(f"Поиск завершен за {elapsed_time:.2f} сек! Найдено {len(similar_channels)} похожих каналов.")
-                    
-                    # Сохраняем результаты в session_state
-                    st.session_state["similar_channels_df"] = similar_channels
-                    
-                    # Отображаем таблицу с результатами
-                    display_similar_channels_results()
-                else:
-                    status_message.warning("Поиск завершен, но не найдено похожих каналов, соответствующих критериям.")
+                # Если указан аккаунт Google, выполняем вход
+                if google_account and use_google_account:
+                    update_search_progress(10, "Выполняем вход в Google аккаунт...")
+                    login_success = analyzer.login_to_google()
+                    if login_success:
+                        st.session_state["is_logged_in"] = True
+                        st.session_state["google_account"] = google_account
+                        st.session_state["youtube_analyzer"] = analyzer
+                        update_search_progress(15, "Вход в Google выполнен успешно!")
+                    else:
+                        update_search_progress(15, "Не удалось войти в Google аккаунт, продолжаем без авторизации...")
             
-            except Exception as e:
-                status_message.error(f"Произошла ошибка при поиске похожих каналов: {str(e)}")
-                # Отображаем более подробную информацию в expander
-                with st.expander("Подробности ошибки"):
-                    st.exception(e)
+            # Выполняем поиск похожих каналов
+            similar_channels = find_similar_channels(
+                analyzer,
+                channel_urls,
+                source_videos_limit=source_videos_limit,
+                recommendation_limit=recommendation_limit,
+                min_channel_views=min_channel_views,
+                max_channel_age=max_channel_age,
+                progress_callback=update_search_progress
+            )
+            
+            # Вычисляем затраченное время
+            elapsed_time = time.time() - start_time
+            
+            # Отображаем результаты
+            if similar_channels is not None and not similar_channels.empty:
+                status_message.success(f"Поиск завершен за {elapsed_time:.2f} сек! Найдено {len(similar_channels)} похожих каналов.")
+                
+                # Добавим информацию о параметрах найденных каналов для отладки
+                debug_info = st.expander("Информация о параметрах каналов (для отладки)", expanded=False)
+                with debug_info:
+                    st.info("Эта информация поможет диагностировать проблемы с извлечением данных о каналах")
+                    # Создаем отладочную таблицу
+                    if 'URL канала' in similar_channels.columns:
+                        debug_df = similar_channels[['URL канала', 'Название канала', 'Общее число просмотров', 
+                                           'Количество видео', 'Возраст канала (дней)', 
+                                           'Количество подписчиков', 'Страна']].copy()
+                    else:
+                        debug_df = similar_channels[['Ссылка на канал', 'Название канала', 'Общее число просмотров', 
+                                           'Количество видео', 'Возраст канала (дней)', 
+                                           'Количество подписчиков', 'Страна']].copy()
+                    st.dataframe(debug_df, use_container_width=True)
+                    
+                    # Анализируем данные
+                    missing_values = debug_df.iloc[:, 1:].isna().sum()
+                    missing_views = (debug_df['Общее число просмотров'] == 0).sum()
+                    missing_videos = (debug_df['Количество видео'] == 0).sum()
+                    missing_age = (debug_df['Возраст канала (дней)'] == 0).sum()
+                    missing_subs = (debug_df['Количество подписчиков'] == '—').sum()
+                    
+                    st.write(f"**Анализ данных:**")
+                    st.write(f"- Каналов с отсутствующими просмотрами: {missing_views} из {len(debug_df)}")
+                    st.write(f"- Каналов с отсутствующим количеством видео: {missing_videos} из {len(debug_df)}")
+                    st.write(f"- Каналов с отсутствующим возрастом: {missing_age} из {len(debug_df)}")
+                    st.write(f"- Каналов с отсутствующим числом подписчиков: {missing_subs} из {len(debug_df)}")
+                    
+                    if missing_views > 0 or missing_videos > 0 or missing_age > 0 or missing_subs > 0:
+                        st.warning("Обнаружены пропущенные данные. YouTube может скрывать некоторую информацию о каналах или изменил формат страницы.")
+                
+                # Сохраняем результаты в session_state и глобальную переменную
+                st.session_state["similar_channels_df"] = similar_channels
+                global similar_channels_df
+                similar_channels_df = similar_channels
+                
+                # Отображаем таблицу с результатами
+                display_similar_channels_results()
+            else:
+                status_message.warning("Поиск завершен, но не найдено похожих каналов, соответствующих критериям.")
+        
+        except Exception as e:
+            status_message.error(f"Ошибка при поиске похожих каналов: {str(e)}")
+            st.exception(e)
+            
+            # Закрываем драйвер, если мы его создали и произошла ошибка
+            if 'analyzer' in locals() and analyzer and analyzer != existing_analyzer:
+                try:
+                    analyzer.quit_driver()
+                except:
+                    pass
+        
+    elif start_search:
+        st.error("Пожалуйста, введите хотя бы один URL канала YouTube.")
     
-    # Если есть сохраненные результаты, отображаем их
-    elif "similar_channels_df" in st.session_state and not st.session_state["similar_channels_df"].empty:
-        st.success(f"Показаны предыдущие результаты поиска ({len(st.session_state['similar_channels_df'])} каналов).")
+    # Отображаем сохраненные результаты, если они есть
+    if not start_search and "similar_channels_df" in st.session_state and not st.session_state["similar_channels_df"].empty:
+        st.success("Показаны предыдущие результаты поиска похожих каналов.")
         display_similar_channels_results()
 
 # Функция для обновления индикатора прогресса
@@ -2452,454 +2583,1111 @@ def update_progress(progress_bar, status_message, progress, message):
     progress_bar.progress(normalized_progress)
     status_message.info(message)
 
-# Функция для отображения результатов поиска похожих каналов
+def subscribers_to_int(subscribers_text):
+    """
+    Преобразует текстовое представление числа подписчиков в целое число для сортировки.
+    
+    Args:
+        subscribers_text (str): Текстовое представление числа подписчиков (например, "1.5M", "500K")
+        
+    Returns:
+        int: Целое число подписчиков
+    """
+    if not subscribers_text or subscribers_text == "—" or subscribers_text.lower() == "скрыто":
+        return 0
+    
+    try:
+        # Удаляем пробелы и запятые
+        clean_text = subscribers_text.replace(" ", "").replace(",", "")
+        
+        # Проверяем на K (тысячи)
+        if "K" in clean_text or "тыс" in clean_text:
+            value = float(clean_text.replace("K", "").replace("тыс.", "").replace("тыс", ""))
+            return int(value * 1000)
+        
+        # Проверяем на M (миллионы)
+        elif "M" in clean_text or "млн" in clean_text:
+            value = float(clean_text.replace("M", "").replace("млн.", "").replace("млн", ""))
+            return int(value * 1000000)
+        
+        # Просто число
+        else:
+            return int(clean_text)
+    except:
+        return 0
+
 def display_similar_channels_results():
     """
-    Отображает таблицу с результатами поиска похожих каналов.
+    Отображает результаты поиска похожих каналов.
+    
+    Использует глобальный DataFrame similar_channels_df
     """
-    if "similar_channels_df" not in st.session_state or st.session_state["similar_channels_df"] is None or st.session_state["similar_channels_df"].empty:
+    global similar_channels_df
+    
+    if similar_channels_df is None or similar_channels_df.empty:
+        st.warning("🔍 Результаты не найдены. Пожалуйста, выполните поиск похожих каналов.")
         return
     
-    # Получаем DataFrame с результатами
-    df = st.session_state["similar_channels_df"].copy()
+    # Добавляем счетчик каналов и информацию о соответствии критериям
+    not_matching_count = 0
+    matching_count = 0
     
-    # Опции сортировки
-    sort_options = {
-        "По просмотрам (от молодых к старым)": ["Возраст канала (дней)", "Общее число просмотров"],
-        "По просмотрам (от новых к старым)": ["Возраст канала (дней)", "Общее число просмотров"],
-        "По просмотрам (убывание)": ["Общее число просмотров"],
-        "По возрасту канала (возрастание)": ["Возраст канала (дней)"],
-        "По количеству видео (убывание)": ["Количество видео"],
-        "По просмотрам последних видео (убывание)": ["Просмотры последних 10 видео"],
-        "По просмотрам первых видео (убывание)": ["Просмотры первых 10 видео"]
-    }
+    if "Соответствует критериям" in similar_channels_df.columns:
+        not_matching_count = sum(similar_channels_df["Соответствует критериям"] == "Нет")
+        matching_count = sum(similar_channels_df["Соответствует критериям"] == "Да")
     
-    # Выбор сортировки
-    sort_by = st.selectbox(
-        "Сортировать результаты:",
-        list(sort_options.keys()),
-        index=0
-    )
+    total_count = len(similar_channels_df)
     
-    # Применяем выбранную сортировку
-    sort_columns = sort_options[sort_by]
-    ascending = [True] * len(sort_columns)
+    # Показываем статистику
+    if matching_count > 0 and not_matching_count > 0:
+        st.success(f"🎯 Найдено {total_count} каналов: {matching_count} соответствуют критериям, {not_matching_count} не соответствуют.")
+    elif matching_count > 0:
+        st.success(f"🎯 Найдено {matching_count} каналов, соответствующих критериям.")
+    elif not_matching_count > 0:
+        st.warning(f"🔍 Найдено {not_matching_count} каналов, но ни один не соответствует критериям фильтрации.")
+    else:
+        st.success(f"🎯 Найдено {total_count} каналов.")
     
-    if sort_by == "По просмотрам (от молодых к старым)":
-        # Сначала сортируем по возрасту (по возрастанию), затем по просмотрам (по убыванию)
-        ascending = [True, False]
-    elif sort_by == "По просмотрам (от новых к старым)":
-        # Сначала сортируем по возрасту (по убыванию), затем по просмотрам (по убыванию)
-        ascending = [False, False]
-    elif "убывание" in sort_by:
-        # Для всех остальных "убывающих" сортировок
-        ascending = [False] * len(sort_columns)
-    
-    # Применяем сортировку
-    df_sorted = df.sort_values(by=sort_columns, ascending=ascending)
+    # Добавляем фильтры
+    with st.expander("Фильтры и поиск", expanded=True):
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            # Добавляем фильтр по соответствию критериям, если есть такая колонка
+            if "Соответствует критериям" in similar_channels_df.columns and not_matching_count > 0 and matching_count > 0:
+                criteria_filter = st.radio(
+                    "Показать каналы:",
+                    options=["Все", "Соответствующие критериям", "Не соответствующие критериям"],
+                    index=0
+                )
+                
+                filtered_df = similar_channels_df
+                if criteria_filter == "Соответствующие критериям":
+                    filtered_df = similar_channels_df[similar_channels_df["Соответствует критериям"] == "Да"]
+                elif criteria_filter == "Не соответствующие критериям":
+                    filtered_df = similar_channels_df[similar_channels_df["Соответствует критериям"] == "Нет"]
+            else:
+                filtered_df = similar_channels_df
+        
+        with col2:
+            # Фильтр по минимальному количеству просмотров
+            if "Общее число просмотров" in filtered_df.columns:
+                min_views = st.number_input(
+                    "Минимальное количество просмотров:",
+                    min_value=0,
+                    max_value=int(filtered_df["Общее число просмотров"].max() if len(filtered_df) > 0 else 1000000),
+                    value=0,
+                    step=10000
+                )
+                
+                if min_views > 0:
+                    filtered_df = filtered_df[filtered_df["Общее число просмотров"] >= min_views]
+        
+        with col3:
+            # Поиск по названию канала
+            search_query = st.text_input("Поиск по названию канала:", "")
+            
+            if search_query:
+                filtered_df = filter_by_search(filtered_df, search_query)
     
     # Отображаем таблицу с результатами
-    st.dataframe(df_sorted, use_container_width=True)
+    if filtered_df.empty:
+        st.warning("⚠️ Нет каналов, удовлетворяющих заданным фильтрам.")
+        return
     
-    # Создаем ссылку для скачивания
-    csv = df_sorted.to_csv(index=False, sep='\t')
-    b64 = base64.b64encode(csv.encode('utf-8')).decode()
-    href = f'<div style="text-align: right; margin: 10px 0;"><a href="data:file/csv;base64,{b64}" download="youtube_similar_channels.tsv" style="background-color: #4CAF50; color: white; padding: 8px 16px; text-decoration: none; border-radius: 4px;">📊 Скачать TSV файл</a></div>'
-    st.markdown(href, unsafe_allow_html=True)
+    # Определяем колонки для отображения
+    display_columns = []
+    
+    if "Ссылка на канал" in filtered_df.columns:
+        display_columns.append("Ссылка на канал")
+    
+    if "Название канала" in filtered_df.columns:
+        display_columns.append("Название канала")
+    
+    if "Количество подписчиков" in filtered_df.columns:
+        display_columns.append("Количество подписчиков")
+    
+    if "Количество видео" in filtered_df.columns:
+        display_columns.append("Количество видео")
+    
+    if "Общее число просмотров" in filtered_df.columns:
+        display_columns.append("Общее число просмотров")
+    
+    if "Возраст канала (дней)" in filtered_df.columns:
+        display_columns.append("Возраст канала (дней)")
+    
+    if "Страна" in filtered_df.columns:
+        display_columns.append("Страна")
+    
+    if "Соответствует критериям" in filtered_df.columns:
+        display_columns.append("Соответствует критериям")
+    
+    # Выбираем только нужные колонки
+    filtered_df = filtered_df[display_columns]
+    
+    # Добавляем ссылки на каналы
+    def make_clickable(url, text=None):
+        text = text or url
+        return f'<a href="{url}" target="_blank">{text}</a>'
+    
+    if "Ссылка на канал" in filtered_df.columns and "Название канала" in filtered_df.columns:
+        filtered_df["Название канала"] = filtered_df.apply(
+            lambda row: make_clickable(row["Ссылка на канал"], row["Название канала"]),
+            axis=1
+        )
+    
+    # Удаляем колонку со ссылкой, так как мы добавили ее в название
+    if "Ссылка на канал" in filtered_df.columns:
+        filtered_df = filtered_df.drop(columns=["Ссылка на канал"])
+    
+    # Форматируем числовые колонки
+    for col in filtered_df.columns:
+        if col in ["Общее число просмотров", "Количество подписчиков", "Количество видео"]:
+            filtered_df[col] = filtered_df[col].apply(lambda x: f"{x:,}".replace(",", " ") if isinstance(x, (int, float)) else x)
+    
+    # Добавляем стилизацию для строк с разными значениями в колонке "Соответствует критериям"
+    def highlight_criteria(row):
+        if "Соответствует критериям" not in row.index:
+            return [""] * len(row)
+        
+        if row["Соответствует критериям"] == "Нет":
+            return ["background-color: #ffe6e6"] * len(row)
+        else:
+            return ["background-color: #e6ffe6"] * len(row)
+    
+    # Применяем стилизацию и отображаем таблицу с HTML
+    styled_df = filtered_df.style.apply(highlight_criteria, axis=1)
+    
+    # Преобразуем таблицу в HTML и отображаем её
+    st.write(styled_df.to_html(escape=False), unsafe_allow_html=True)
+    
+    # Добавляем статистику по найденным каналам
+    with st.expander("Статистика по найденным каналам", expanded=False):
+        if "Общее число просмотров" in filtered_df.columns:
+            total_views = filtered_df["Общее число просмотров"].sum()
+            avg_views = filtered_df["Общее число просмотров"].mean()
+            
+            st.metric("Общее количество просмотров", f"{total_views:,}".replace(",", " "))
+            st.metric("Среднее количество просмотров", f"{int(avg_views):,}".replace(",", " "))
+        
+        if "Количество подписчиков" in filtered_df.columns:
+            # Преобразуем числа подписчиков в целочисленные значения
+            subscribers = filtered_df["Количество подписчиков"].apply(subscribers_to_int)
+            if subscribers.notna().any():
+                avg_subscribers = subscribers[subscribers.notna()].mean()
+                st.metric("Среднее количество подписчиков", f"{int(avg_subscribers):,}".replace(",", " "))
+        
+        if "Возраст канала (дней)" in filtered_df.columns:
+            avg_age = filtered_df["Возраст канала (дней)"].mean()
+            st.metric("Средний возраст канала", f"{int(avg_age)} дней")
+            
+    # Добавляем кнопку для скачивания результатов
+    if len(filtered_df) > 0:
+        # Восстанавливаем колонку "Ссылка на канал" для CSV
+        if "Ссылка на канал" not in filtered_df.columns and "Ссылка на канал" in similar_channels_df.columns:
+            filtered_df["Ссылка на канал"] = similar_channels_df.loc[filtered_df.index, "Ссылка на канал"]
+        
+        # Преобразуем DataFrame в CSV
+        csv = filtered_df.to_csv(index=False).encode('utf-8')
+        
+        st.download_button(
+            label="Скачать результаты как CSV",
+            data=csv,
+            file_name="youtube_similar_channels.csv",
+            mime="text/csv",
+        )
 
 # Функция для поиска похожих каналов
 def find_similar_channels(analyzer, channel_urls, source_videos_limit=30, recommendation_limit=30, 
                            min_channel_views=50000, max_channel_age=0, progress_callback=None):
     """
-    Находит похожие каналы на основе рекомендаций YouTube.
+    Находит похожие каналы на основе предоставленных ссылок на каналы/видео.
     
     Args:
-        analyzer: Экземпляр YouTubeAnalyzer
-        channel_urls: Список URL каналов для анализа
-        source_videos_limit: Количество видео с исходного канала
-        recommendation_limit: Количество рекомендаций для каждого видео
-        min_channel_views: Минимальное общее число просмотров на канале
-        max_channel_age: Максимальный возраст канала в днях (0 = без ограничений)
-        progress_callback: Функция обратного вызова для обновления прогресса
+        analyzer (YouTubeAnalyzer): Экземпляр класса YouTubeAnalyzer для доступа к YouTube
+        channel_urls (list): Список URL каналов или видео YouTube
+        source_videos_limit (int): Максимальное количество исходных видео для анализа
+        recommendation_limit (int): Максимальное количество рекомендуемых видео для каждого исходного видео
+        min_channel_views (int): Минимальное количество просмотров канала для включения в результаты
+        max_channel_age (int): Максимальный возраст канала в днях (0 - без ограничений)
+        progress_callback (callable): Функция обратного вызова для обновления прогресса
         
     Returns:
-        DataFrame с информацией о похожих каналах
+        pd.DataFrame: DataFrame с информацией о похожих каналах
     """
+    if not channel_urls or len(channel_urls) == 0:
+        return pd.DataFrame()
+    
+    # Обновляем прогресс, если нужно
+    if progress_callback:
+        progress_callback(5, "Инициализация поиска похожих каналов...")
+    
     # Словарь для хранения информации о каналах
     channels_info = {}
     
-    # Кэш для хранения информации о видео и рекомендациях
-    video_cache = {}
-    channel_info_cache = {}
+    # Счетчик для отслеживания доступа к каналам
+    inaccessible_channels_count = 0
+    total_channels_processed = 0
     
-    # Счетчики для отслеживания прогресса
-    total_channels = len(channel_urls)
-    total_source_videos = 0
-    processed_source_videos = 0
-    
-    # Собираем все видео с исходных каналов
-    all_source_videos = []
-    
-    logger.info(f"Начинаем сбор видео с {total_channels} исходных каналов")
-    
-    # Этап 1: Сбор видео с исходных каналов
-    for channel_idx, channel_url in enumerate(channel_urls):
-        # Обновляем прогресс
+    try:
+        # Шаг 1: Обрабатываем источники (каналы или видео)
         if progress_callback:
-            current_progress = (channel_idx / total_channels) * 40  # Первые 40% прогресса на сбор видео
-            progress_callback(current_progress, f"Получение информации о канале {channel_idx+1}/{total_channels}...")
+            progress_callback(10, "Обработка исходных URL...")
         
-        try:
-            # Быстрое получение информации о канале
-            channel_info = get_channel_info_fast(channel_url)
-            channel_name = channel_info.get("Название канала") or f"Канал {channel_idx+1}"
+        source_channel_urls = []
+        source_channel_ids = []
+        
+        for url in channel_urls:
+            if not url.strip():
+                continue
+                
+            # Очищаем URL
+            url = clean_youtube_url(url)
             
-            # Получаем ссылки на видео с канала
-            try:
-                video_urls = []
+            # Проверяем, видео это или канал
+            if "/watch?v=" in url or "youtu.be/" in url:
+                # Это видео - получаем канал через API
+                video_details = get_video_details_fast(url)
                 
-                # Используем быстрый HTTP-метод для получения ссылок на видео
-                logger.info(f"Получение видео с канала {channel_url} быстрым методом")
+                if video_details and video_details.get("channel_url"):
+                    channel_url = video_details.get("channel_url")
+                    source_channel_urls.append(channel_url)
+                else:
+                    logger.warning(f"Не удалось получить канал из видео: {url}")
+            else:
+                # Это URL канала
+                source_channel_urls.append(url)
                 
-                videos_url = channel_url
-                if not "/videos" in videos_url:
-                    if videos_url.endswith("/"):
-                        videos_url = f"{videos_url}videos"
-                    else:
-                        videos_url = f"{videos_url}/videos"
+                # Извлекаем ID канала из URL
+                channel_id = None
+                if "/channel/" in url:
+                    channel_id = url.split("/channel/")[1].split("/")[0]
+                    source_channel_ids.append(channel_id)
+        
+        if len(source_channel_urls) == 0:
+            if progress_callback:
+                progress_callback(100, "Не удалось обработать исходные URL.")
+            return pd.DataFrame()
+            
+        # Проверяем наличие API ключа для использования YouTube Data API
+        use_api = False
+        if hasattr(st.session_state, 'youtube_api_key') and st.session_state.youtube_api_key:
+            use_api = True
+            api_key = st.session_state.youtube_api_key
+            
+            # Если у нас есть хотя бы один ID канала и API ключ, используем API для поиска похожих каналов
+            if source_channel_ids and use_api:
+                if progress_callback:
+                    progress_callback(15, f"Поиск похожих каналов через YouTube API...")
                 
-                # Делаем запрос к странице с видео канала
-                headers = {
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                    "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7"
-                }
+                api_found_channels = []
+                total_channels = len(source_channel_ids)
                 
-                response = requests.get(videos_url, headers=headers, timeout=10)
-                
-                if response.status_code == 200:
-                    html = response.text
-                    
-                    # Ищем все URL видео на странице
-                    video_matches = re.findall(r'href=\"(/watch\?v=[^\"&]+)', html)
-                    
-                    # Берем только уникальные URL
-                    seen_urls = set()
-                    for match in video_matches:
-                        full_url = f"https://www.youtube.com{match}"
-                        if full_url not in seen_urls:
-                            seen_urls.add(full_url)
-                            video_urls.append(full_url)
-                    
-                    logger.info(f"Найдено {len(video_urls)} видео на странице канала {channel_url}")
-                    
-                    # Если видео не найдены, то пробуем использовать JavaScript-данные
-                    if not video_urls:
-                        logger.info("Пробуем извлечь видео из JavaScript-данных")
-                        
-                        # Ищем videoIds в JavaScript-данных
-                        js_video_matches = re.findall(r'"videoId":"([a-zA-Z0-9_-]{11})"', html)
-                        
-                        # Берем только уникальные videoId
-                        seen_video_ids = set()
-                        for video_id in js_video_matches:
-                            if video_id not in seen_video_ids:
-                                seen_video_ids.add(video_id)
-                                video_urls.append(f"https://www.youtube.com/watch?v={video_id}")
-                        
-                        logger.info(f"Найдено {len(video_urls)} видео в JavaScript-данных")
-                
-                # Ограничиваем количество видео для анализа
-                video_urls = video_urls[:source_videos_limit]
-                
-                # Если не удалось получить видео быстрым способом, используем Selenium
-                if not video_urls:
-                    logger.info(f"Не удалось получить видео быстрым методом, используем Selenium для канала {channel_url}")
+                for idx, channel_id in enumerate(source_channel_ids):
                     if progress_callback:
-                        progress_callback(current_progress, f"Получение видео с канала {channel_name} ({channel_idx+1}/{total_channels})...")
+                        progress_callback(15 + (65 * idx // total_channels), 
+                                         f"API поиск для канала {idx+1}/{total_channels}...")
                     
-                    selenium_videos = analyzer.get_last_videos_from_channel(channel_url, limit=source_videos_limit)
-                    if selenium_videos:
-                        for video in selenium_videos:
-                            if isinstance(video, dict) and "url" in video:
-                                video_urls.append(video["url"])
-                            elif isinstance(video, str):
-                                video_urls.append(video)
-                
-                if not video_urls:
-                    logger.warning(f"Не удалось получить видео с канала {channel_url}")
-                    continue
+                    # Используем API метод для поиска похожих каналов
+                    similar_channels = analyzer.find_similar_channels_api(channel_id, api_key, 
+                                                                         max_results=recommendation_limit*2)
                     
-                logger.info(f"Получено {len(video_urls)} видео с канала {channel_url}")
-                
-                # Сохраняем видео с указанием исходного канала
-                for video_url in video_urls:
-                    all_source_videos.append((video_url, channel_url, channel_name))
-                
-                total_source_videos += len(video_urls)
-                
-            except Exception as e:
-                logger.error(f"Ошибка при получении видео с канала {channel_url}: {e}")
-                continue
-                
-        except Exception as e:
-            logger.error(f"Ошибка при получении информации о канале {channel_url}: {e}")
-            continue
-    
-    logger.info(f"Всего собрано {total_source_videos} видео с {total_channels} каналов")
-    
-    # Этап 2: Сбор рекомендаций для всех видео
-    for video_idx, (video_url, source_channel_url, source_channel_name) in enumerate(all_source_videos):
-        processed_source_videos += 1
-        
-        # Обновляем прогресс
-        if progress_callback:
-            current_progress = 40 + (processed_source_videos / total_source_videos) * 30  # Следующие 30% прогресса на сбор рекомендаций
-            progress_callback(current_progress, f"Анализ рекомендаций для видео {processed_source_videos}/{total_source_videos} с канала {source_channel_name}...")
-        
-        try:
-            # Получаем рекомендации для текущего видео (используем быстрый метод)
-            recommendations = analyzer.get_recommended_videos_fast(video_url, limit=recommendation_limit)
-            
-            if not recommendations:
-                logger.warning(f"Не удалось получить рекомендации для видео {video_url}")
-                continue
-            
-            logger.info(f"Получено {len(recommendations)} рекомендаций для видео {video_url}")
-            
-            # Обрабатываем рекомендации
-            for rec in recommendations:
-                rec_url = rec.get("url") if isinstance(rec, dict) else rec
-                
-                try:
-                    # Получаем данные о видео быстрым методом
-                    rec_video_details = get_video_details_fast(rec_url)
-                    if not rec_video_details:
-                        continue
-                    
-                    # Получаем URL канала
-                    channel_url = rec_video_details.get("channel_url")
-                    if not channel_url:
-                        continue
-                    
-                    # Пропускаем исходные каналы
-                    if any(source_url in channel_url for source_url in channel_urls):
-                        continue
-                    
-                    # Если это новый канал - получаем информацию о нем
-                    if channel_url not in channels_info:
-                        # Получаем информацию о канале быстрым методом
-                        channel_info_data = get_channel_info_fast(channel_url)
+                    if similar_channels:
+                        api_found_channels.extend(similar_channels)
                         
-                        # Вычисляем возраст канала
-                        channel_age = 0
-                        if channel_info_data.get("Возраст канала (дней)"):
-                            channel_age = channel_info_data.get("Возраст канала (дней)")
-                        
-                        # Собираем только необходимые данные о канале
-                        channel_info = {
-                            "Ссылка на канал": channel_url,
-                            "Название канала": channel_info_data.get("Название канала") or rec_video_details.get("channel_name", "Неизвестно"),
-                            "Количество видео": channel_info_data.get("Количество видео", 0),
-                            "Общее число просмотров": channel_info_data.get("Общее число просмотров", 0),
-                            "Возраст канала (дней)": channel_age
+                        if progress_callback:
+                            progress_callback(15 + (65 * (idx+1) // total_channels), 
+                                             f"Найдено {len(similar_channels)} каналов через API для канала {idx+1}")
+                
+                # Если мы нашли каналы через API, преобразуем их в нужный формат и возвращаем результат
+                if api_found_channels:
+                    if progress_callback:
+                        progress_callback(85, f"Обработка {len(api_found_channels)} найденных через API каналов...")
+                    
+                    # Преобразуем в DataFrame
+                    channels_df = pd.DataFrame([
+                        {
+                            "Ссылка на канал": channel.get("url"),
+                            "Название канала": channel.get("title"),
+                            "Описание": channel.get("description"),
+                            "Количество подписчиков": channel.get("subscriber_count"),
+                            "Количество видео": channel.get("video_count"),
+                            "Общее число просмотров": channel.get("view_count"),
+                            "Возраст канала (дней)": channel.get("channel_age_days"),
+                            "Страна": channel.get("country"),
+                            "Миниатюра": channel.get("thumbnail")
                         }
-                        
-                        channels_info[channel_url] = channel_info
+                        for channel in api_found_channels
+                    ])
                     
-                except Exception as e:
-                    logger.error(f"Ошибка при обработке рекомендации {rec_url}: {e}")
+                    # Удаляем дубликаты
+                    channels_df = channels_df.drop_duplicates(subset=["Ссылка на канал"])
+                    
+                    # Сохраняем копию всех каналов до фильтрации
+                    all_channels_df = channels_df.copy()
+                    
+                    # Применяем фильтры
+                    if min_channel_views > 0:
+                        channels_df = filter_by_views(channels_df, min_channel_views)
+                    
+                    if max_channel_age > 0:
+                        channels_df = filter_by_date(channels_df, max_channel_age)
+                    
+                    # Сортируем по просмотрам
+                    if "Общее число просмотров" in channels_df.columns:
+                        channels_df = channels_df.sort_values(by="Общее число просмотров", ascending=False)
+                    
+                    if len(channels_df) == 0:
+                        if progress_callback:
+                            progress_callback(100, f"Поиск завершен, но ни один канал не соответствует критериям. Показываем все найденные каналы.")
+                        # Возвращаем все каналы, но добавляем колонку с пометкой, что они не соответствуют критериям
+                        all_channels_df["Соответствует критериям"] = "Нет"
+                        # Сортируем по просмотрам
+                        if "Общее число просмотров" in all_channels_df.columns:
+                            all_channels_df = all_channels_df.sort_values(by="Общее число просмотров", ascending=False)
+                        return all_channels_df
+                    else:
+                        if progress_callback:
+                            progress_callback(100, f"Поиск завершен. Найдено {len(channels_df)} похожих каналов.")
+                        # Добавляем колонку с отметкой, что каналы соответствуют критериям
+                        channels_df["Соответствует критериям"] = "Да"
+                        return channels_df
+            
+        # Если API не доступен или не нашел результатов, используем стандартный поиск через Selenium
+
+        # Шаг 2: Получаем видео с каждого исходного канала
+        if progress_callback:
+            progress_callback(20, f"Получение видео с {len(source_channel_urls)} исходных каналов...")
+        
+        all_source_videos = []
+        
+        for source_channel in source_channel_urls:
+            try:
+                # Используем быстрый метод без Selenium
+                # Извлекаем ID канала из URL
+                channel_id = None
+                if "/channel/" in source_channel:
+                    channel_id = source_channel.split("/channel/")[1].split("/")[0]
+                
+                # Если есть ID, используем API
+                if channel_id and hasattr(st.session_state, 'youtube_api_key') and st.session_state.youtube_api_key:
+                    # Получаем через API
+                    api_key = st.session_state.youtube_api_key
+                    videos = analyzer._get_channel_videos_api(channel_id, limit=source_videos_limit)
+                    if videos:
+                        all_source_videos.extend(videos)
+                        logger.info(f"Получено {len(videos)} видео с канала {source_channel} через API")
+                    else:
+                        # Если API не сработал, пробуем через Selenium
+                        videos = analyzer.get_last_videos_from_channel(source_channel, limit=source_videos_limit)
+                        if videos:
+                            all_source_videos.extend(videos)
+                            logger.info(f"Получено {len(videos)} видео с канала {source_channel} через Selenium")
+                else:
+                    # Используем Selenium
+                    videos = analyzer.get_last_videos_from_channel(source_channel, limit=source_videos_limit)
+                    if videos:
+                        all_source_videos.extend(videos)
+                        logger.info(f"Получено {len(videos)} видео с канала {source_channel} через Selenium")
+            except Exception as e:
+                logger.error(f"Ошибка при получении видео с канала {source_channel}: {str(e)}")
+        
+        if len(all_source_videos) == 0:
+            if progress_callback:
+                progress_callback(100, "Не удалось получить видео с исходных каналов.")
+            return pd.DataFrame()
+        
+        # Ограничиваем количество исходных видео
+        if len(all_source_videos) > source_videos_limit:
+            all_source_videos = all_source_videos[:source_videos_limit]
+        
+        # Шаг 3: Получаем рекомендации для каждого исходного видео
+        if progress_callback:
+            progress_callback(30, f"Получение рекомендаций для {len(all_source_videos)} видео...")
+        
+        unique_channels = set()
+        
+        progress_per_video = 50 / max(1, len(all_source_videos))
+        for idx, video in enumerate(all_source_videos):
+            try:
+                # Получаем рекомендации для видео
+                recommended_videos = analyzer.get_recommended_videos_fast(video['url'], limit=recommendation_limit)
+                
+                if not recommended_videos:
                     continue
                 
-        except Exception as e:
-            logger.error(f"Ошибка при получении рекомендаций для видео {video_url}: {e}")
-            continue
-    
-    # Этап 3: Фильтрация и форматирование результатов
-    logger.info(f"Найдено {len(channels_info)} уникальных каналов для анализа")
-    
-    # Преобразуем словарь в DataFrame
-    channels_df = pd.DataFrame(list(channels_info.values()))
-    
-    # Отладочный вывод перед фильтрацией
-    if not channels_df.empty:
-        logger.info(f"Перед фильтрацией: {len(channels_df)} каналов")
-        logger.info(f"Минимальное число просмотров для фильтрации: {min_channel_views}")
-        logger.info(f"Максимальный возраст канала для фильтрации: {max_channel_age}")
+                # Извлекаем уникальные каналы из рекомендаций
+                for rec_video in recommended_videos:
+                    channel_url = rec_video.get('channel_url')
+                    
+                    if not channel_url or channel_url in unique_channels:
+                        continue
+                    
+                    unique_channels.add(channel_url)
+                
+                # Обновляем прогресс
+                if progress_callback:
+                    current_progress = 30 + progress_per_video * (idx + 1)
+                    progress_callback(min(80, current_progress), f"Обработано {idx+1}/{len(all_source_videos)} видео, найдено {len(unique_channels)} уникальных каналов...")
+            
+            except Exception as e:
+                logger.error(f"Ошибка при получении рекомендаций для видео {video.get('url', 'Unknown')}: {str(e)}")
         
-        # Выводим данные о каналах для отладки
-        for i, row in channels_df.iterrows():
-            channel_name = row.get("Название канала", "Неизвестно")
-            views = row.get("Общее число просмотров", 0)
-            age = row.get("Возраст канала (дней)", 0)
-            logger.info(f"Канал: {channel_name}, Просмотры: {views}, Возраст: {age}")
+        # Если нет уникальных каналов, возвращаем пустой DataFrame
+        if len(unique_channels) == 0:
+            if progress_callback:
+                progress_callback(100, "Не найдено уникальных каналов в рекомендациях.")
+            return pd.DataFrame()
         
-        # Приводим числовые колонки к числовому типу перед фильтрацией
-        for col in ["Общее число просмотров", "Возраст канала (дней)"]:
-            if col in channels_df.columns:
-                # Преобразуем нечисловые значения в 0
-                channels_df[col] = pd.to_numeric(channels_df[col], errors='coerce').fillna(0).astype(int)
+        # Шаг 4: Получаем информацию о каждом уникальном канале
+        if progress_callback:
+            progress_callback(80, f"Получение информации о {len(unique_channels)} каналах...")
         
-        # Фильтрация по минимальному числу просмотров
+        # Создаем список для хранения данных каналов
+        channels_data = []
+        
+        # Если мы дошли сюда - значит нашли что-то, отмечаем флаг
+        found_any = len(unique_channels) > 0
+        
+        # Получаем информацию о каждом уникальном канале
+        progress_per_channel = 20 / max(1, len(unique_channels))
+        
+        for idx, channel_url in enumerate(unique_channels):
+            try:
+                # Пропускаем пустые URL
+                if not channel_url:
+                    continue
+                
+                # Если это новый канал - получаем информацию о нем
+                if channel_url not in channels_info:
+                    # Получаем информацию о канале быстрым методом
+                    channel_info_data = get_channel_info_fast(channel_url)
+                    
+                    # Увеличиваем счетчик обработанных каналов
+                    total_channels_processed += 1
+                    
+                    # Проверяем доступность данных канала
+                    if not channel_info_data:
+                        logger.warning(f"Не удалось получить информацию о канале {channel_url}")
+                        inaccessible_channels_count += 1
+                        continue
+                    
+                    # Проверяем, не является ли это ошибкой доступа
+                    if channel_info_data.get("Название канала", "").startswith("⚠️"):
+                        logger.warning(f"Канал недоступен: {channel_url} - {channel_info_data.get('Название канала')}")
+                        inaccessible_channels_count += 1
+                        continue
+                    
+                    # Отладочная информация о полученных данных канала
+                    logger.info(f"Получена информация о канале: {channel_url}")
+                    logger.info(f"  - Название канала: {channel_info_data.get('Название канала', 'Неизвестно')}")
+                    logger.info(f"  - Количество видео: {channel_info_data.get('Количество видео', 0)}")
+                    logger.info(f"  - Общее число просмотров: {channel_info_data.get('Общее число просмотров', 0)}")
+                    logger.info(f"  - Возраст канала (дней): {channel_info_data.get('Возраст канала (дней)', 0)}")
+                    logger.info(f"  - Количество подписчиков: {channel_info_data.get('Количество подписчиков', '-')}")
+                    logger.info(f"  - Страна: {channel_info_data.get('Страна', 'Неизвестно')}")
+                    
+                    # Подготавливаем информацию о канале
+                    channel_info = {
+                        "Ссылка на канал": channel_url,
+                        "Название канала": channel_info_data.get("Название канала", "Неизвестно"),
+                        "Общее число просмотров": channel_info_data.get("Общее число просмотров", 0),
+                        "Количество видео": channel_info_data.get("Количество видео", 0),
+                        "Возраст канала (дней)": channel_info_data.get("Возраст канала (дней)", 0),
+                        "Дата создания": channel_info_data.get("Дата создания", "Неизвестно"),
+                        "Количество подписчиков": channel_info_data.get("Количество подписчиков", "—"),
+                        "Страна": channel_info_data.get("Страна", "Неизвестно")
+                    }
+                    
+                    # Сохраняем информацию о канале
+                    channels_info[channel_url] = channel_info
+                
+                # Получаем информацию о канале из словаря
+                channel_info = channels_info[channel_url]
+                
+                # Добавляем информацию о канале в список
+                channels_data.append(channel_info)
+                
+                # Обновляем прогресс
+                if progress_callback:
+                    current_progress = 80 + progress_per_channel * (idx + 1)
+                    progress_callback(min(95, current_progress), f"Обработано {idx+1}/{len(unique_channels)} каналов...")
+            
+            except Exception as e:
+                logger.error(f"Ошибка при получении информации о канале {channel_url}: {str(e)}")
+        
+        # Проверяем, не слишком ли много недоступных каналов
+        if total_channels_processed > 0 and inaccessible_channels_count / total_channels_processed > 0.5:
+            logger.warning(f"Высокий процент недоступных каналов: {inaccessible_channels_count}/{total_channels_processed}")
+            if progress_callback:
+                progress_callback(95, f"Предупреждение: {inaccessible_channels_count} из {total_channels_processed} каналов недоступны. Возможно, YouTube блокирует запросы.")
+        
+        # Если нет данных о каналах, возвращаем пустой DataFrame
+        if len(channels_data) == 0:
+            if progress_callback:
+                progress_callback(100, "Не удалось получить информацию о каналах.")
+            return pd.DataFrame()
+        
+        # Шаг 5: Создаем DataFrame и применяем фильтры
+        unfiltered_channels_df = pd.DataFrame(channels_data)
+        
+        # Копируем исходный DataFrame для фильтрации
+        channels_df = unfiltered_channels_df.copy()
+        
+        # Преобразуем строковые колонки с числами в числовые значения
+        if "Общее число просмотров" in channels_df.columns:
+            channels_df["Общее число просмотров"] = pd.to_numeric(channels_df["Общее число просмотров"], errors="coerce").fillna(0)
+        
+        if "Количество видео" in channels_df.columns:
+            channels_df["Количество видео"] = pd.to_numeric(channels_df["Количество видео"], errors="coerce").fillna(0)
+        
+        if "Возраст канала (дней)" in channels_df.columns:
+            channels_df["Возраст канала (дней)"] = pd.to_numeric(channels_df["Возраст канала (дней)"], errors="coerce").fillna(0)
+        
+        # Логируем количество каналов до фильтрации
+        logger.info(f"Найдено {len(channels_df)} каналов до фильтрации")
+        
+        # Отфильтровываем каналы по минимальному количеству просмотров
         if min_channel_views > 0:
-            channels_before = len(channels_df)
+            logger.info(f"Применяем фильтр по минимальному числу просмотров: {min_channel_views}")
             channels_df = channels_df[channels_df["Общее число просмотров"] >= min_channel_views]
-            logger.info(f"После фильтрации по просмотрам: {len(channels_df)} каналов (было {channels_before})")
+            logger.info(f"После фильтрации по просмотрам осталось {len(channels_df)} каналов")
         
-        # Фильтрация по максимальному возрасту канала
+        # Отфильтровываем каналы по максимальному возрасту
         if max_channel_age > 0:
-            channels_before = len(channels_df)
+            logger.info(f"Применяем фильтр по максимальному возрасту канала: {max_channel_age} дней")
             channels_df = channels_df[channels_df["Возраст канала (дней)"] <= max_channel_age]
-            logger.info(f"После фильтрации по возрасту: {len(channels_df)} каналов (было {channels_before})")
+            logger.info(f"После фильтрации по возрасту осталось {len(channels_df)} каналов")
         
-        # Форматируем ссылки на каналы для отображения в HTML
-        channels_df["Ссылка на канал"] = channels_df.apply(
-            lambda row: f'<a href="{row["Ссылка на канал"]}" target="_blank">{row["Ссылка на канал"]}</a>',
-            axis=1
-        )
+        # Если после фильтрации не осталось каналов, но были найдены каналы до фильтрации,
+        # возвращаем все найденные каналы
+        if channels_df.empty and found_any:
+            logger.warning("После фильтрации не осталось каналов. Возвращаем все найденные каналы без фильтрации.")
+            channels_df = unfiltered_channels_df
+            # Добавляем флаг, что каналы не соответствуют критериям
+            channels_df["Соответствует критериям"] = "Нет"
+            
+            # Сортируем по просмотрам для улучшения отображения
+            if "Общее число просмотров" in channels_df.columns:
+                channels_df = channels_df.sort_values(by="Общее число просмотров", ascending=False)
+                
+            if progress_callback:
+                progress_callback(100, f"Поиск завершен. Найдено {len(channels_df)} похожих каналов, но ни один не соответствует заданным критериям. Показываем все найденные каналы.")
+        elif not channels_df.empty:
+            # Если есть каналы после фильтрации, добавляем флаг
+            channels_df["Соответствует критериям"] = "Да"
+            
+            # Сортируем по просмотрам для улучшения отображения
+            if "Общее число просмотров" in channels_df.columns:
+                channels_df = channels_df.sort_values(by="Общее число просмотров", ascending=False)
+                
+            if progress_callback:
+                progress_callback(100, f"Поиск завершен. Найдено {len(channels_df)} похожих каналов.")
+        else:
+            # Если вообще не найдено каналов
+            if progress_callback:
+                progress_callback(100, f"Поиск завершен, но не найдено похожих каналов.")
         
-        # Форматируем числовые данные для удобного отображения
-        channels_df["Общее число просмотров"] = channels_df["Общее число просмотров"].apply(
-            lambda x: f"{int(x):,}".replace(",", " ") if pd.notna(x) else "—"
-        )
-    else:
-        logger.warning("DataFrame каналов пуст, нечего фильтровать")
+        return channels_df
     
-    # Обновляем прогресс в конце
-    if progress_callback:
-        progress_callback(100, f"Поиск завершен. Найдено {len(channels_df) if not channels_df.empty else 0} похожих каналов")
-    
-    return channels_df
+    except Exception as e:
+        logger.error(f"Критическая ошибка при поиске похожих каналов: {str(e)}")
+        if progress_callback:
+            progress_callback(100, f"Ошибка при поиске похожих каналов: {str(e)}")
+        return pd.DataFrame()
 
 def get_channel_info_fast(channel_url):
     """
-    Быстрое получение основной информации о канале через HTTP-запросы
+    Быстрое получение информации о канале без использования Selenium.
+    
+    Args:
+        channel_url (str): URL канала YouTube
+        
+    Returns:
+        dict: Словарь с информацией о канале или None в случае ошибки
     """
+    # Проверяем кэш
+    if channel_url in channel_info_cache:
+        return channel_info_cache[channel_url]
+    
     try:
-        if channel_url in channel_info_cache:
-            logger.info(f"Использую кешированную информацию для {channel_url}")
-            return channel_info_cache[channel_url]
+        # Нормализуем URL канала
+        if not (channel_url.startswith("http://") or channel_url.startswith("https://")):
+            channel_url = f"https://www.youtube.com{channel_url}"
         
-        logger.info(f"Получение информации о канале {channel_url} быстрым методом")
+        # Убедимся, что мы используем основной URL канала, а не вкладку (например, /videos)
+        channel_base_url = channel_url
+        for tab in ["/videos", "/playlists", "/community", "/channels", "/about"]:
+            if tab in channel_base_url:
+                channel_base_url = channel_base_url.split(tab)[0]
+                break
         
-        # Преобразуем URL в формат страницы about
-        about_url = channel_url
-        if "youtube.com/@" in channel_url:
-            about_url = f"{channel_url}/about"
-        elif "youtube.com/channel/" in channel_url:
-            about_url = f"{channel_url}/about"
-        else:
-            about_url = f"{channel_url}/about"
+        # Пробуем использовать прокси, если настроены
+        proxies = None
+        try:
+            all_proxies = check_proxies()
+            if all_proxies and len(all_proxies) > 0:
+                proxy = random.choice(all_proxies)
+                proxies = {
+                    "http": proxy["http"],
+                    "https": proxy["https"]
+                }
+                logger.info(f"Используем прокси {proxy['server']} для запроса к каналу")
+        except Exception as e:
+            logger.warning(f"Не удалось получить прокси: {str(e)}")
         
-        # Отправляем HTTP-запрос на страницу about канала
+        # Делаем запрос к странице "about" канала, где есть больше информации
+        about_url = f"{channel_base_url}/about" if not channel_base_url.endswith("/") else f"{channel_base_url}about"
+        
+        logger.info(f"Запрашиваем информацию о канале: {about_url}")
+        
+        # Настраиваем заголовки для обхода страницы согласия
         headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7",
+            "Cookie": "CONSENT=YES+cb.20210418-17-p0.en+FX+116; SOCS=CAESEwgDEgk1MjY5MzQ5MjcaAmVuIAEaBgiA_LyaBg"
         }
         
-        response = requests.get(about_url, headers=headers, timeout=10)
-        if response.status_code != 200:
-            logger.warning(f"Ошибка при запросе информации о канале: {response.status_code}")
-            return None
-        
-        html_content = response.text
-        
-        # Извлекаем имя канала
-        channel_name_match = re.search(r'"name":"([^"]+)"', html_content)
-        channel_name = channel_name_match.group(1) if channel_name_match else "Неизвестно"
-        
-        # Попытка найти статистику канала (просмотры, подписчики, дату создания)
-        # Метод 1: Через JSON в HTML
-        channel_data = {}
+        # Пробуем с прокси, если доступен
         try:
-            # Поиск общего количества просмотров
-            views_match = re.search(r'"viewCountText":\s*{"simpleText":\s*"([^"]+)"', html_content)
-            views_text = views_match.group(1) if views_match else "0"
-            views = int(re.sub(r'[^\d]', '', views_text)) if views_match else 0
-            
-            # Поиск даты создания канала
-            date_match = re.search(r'"joinedDateText":\s*{"runs":\s*\[{"text":\s*"[^"]+"},\s*{"text":\s*"([^"]+)"', html_content)
-            
-            if not date_match:
-                # Альтернативный шаблон поиска даты
-                date_match = re.search(r'"joinedDateText":\s*{"runs":\s*\[{"text":\s*"[^"]+"}\s*,\s*{"text":\s*"([^"]+)"', html_content)
-            
-            join_date_text = date_match.group(1).strip() if date_match else ""
-            
-            # Преобразуем текстовую дату в объект datetime
-            if join_date_text:
-                try:
-                    # Пробуем разные форматы даты
-                    formats = ["%d %b %Y", "%d %B %Y", "%b %d, %Y", "%B %d, %Y"]
-                    join_date = None
-                    
-                    for fmt in formats:
-                        try:
-                            join_date = datetime.strptime(join_date_text, fmt)
-                            break
-                        except ValueError:
-                            continue
-                            
-                    if join_date:
-                        channel_age = (datetime.now() - join_date).days
-                    else:
-                        channel_age = 0
-                except Exception as e:
-                    logger.warning(f"Ошибка при парсинге даты: {str(e)}")
-                    channel_age = 0
+            if proxies:
+                response = requests.get(about_url, headers=headers, proxies=proxies, timeout=15)
             else:
-                channel_age = 0
+                response = requests.get(about_url, headers=headers, timeout=15)
+        except Exception as e:
+            logger.error(f"Ошибка при запросе к {about_url}: {str(e)}")
+            # Пробуем без прокси, если была ошибка с прокси
+            if proxies:
+                try:
+                    logger.info("Пробуем запрос без прокси после ошибки")
+                    response = requests.get(about_url, headers=headers, timeout=15)
+                except Exception as e2:
+                    logger.error(f"Повторная ошибка без прокси: {str(e2)}")
+                    # Возвращаем базовую информацию в случае ошибки
+                    default_info = {
+                        "Ссылка на канал": channel_url,
+                        "Название канала": "⚠️ Ошибка доступа",
+                        "Общее число просмотров": 0,
+                        "Количество видео": 0,
+                        "Возраст канала (дней)": 0,
+                        "Дата создания": "Неизвестно",
+                        "Количество подписчиков": "—",
+                        "Страна": "Неизвестно"
+                    }
+                    channel_info_cache[channel_url] = default_info
+                    return default_info
+        
+        if response.status_code == 200:
+            html = response.text
             
-            # Поиск количества видео
-            videos_count_match = re.search(r'"videosCountText":\s*{"runs":\s*\[{"text":\s*"([^"]+)"', html_content)
-            videos_count_text = videos_count_match.group(1) if videos_count_match else "0"
-            videos_count = int(re.sub(r'[^\d]', '', videos_count_text)) if videos_count_match else 0
+            # Проверяем, не вернулась ли страница согласия/предупреждения вместо контента канала
+            if "Прежде чем перейти к YouTube" in html or "consent.youtube.com" in html or "consent.google.com" in html:
+                logger.error(f"Получена страница согласия/предупреждения вместо страницы канала: {about_url}")
+                
+                # Сохраняем HTML страницы для диагностики (только в режиме отладки)
+                debug_dir = "debug_data"
+                os.makedirs(debug_dir, exist_ok=True)
+                channel_id = channel_url.split("/")[-1]
+                file_path = os.path.join(debug_dir, f"channel_{channel_id}_consent_page.html")
+                try:
+                    with open(file_path, "w", encoding="utf-8") as f:
+                        f.write(html)
+                    logger.info(f"Сохранена HTML-страница согласия для отладки: {file_path}")
+                except Exception as e:
+                    logger.error(f"Не удалось сохранить HTML-страницу для отладки: {str(e)}")
+                
+                # Возвращаем базовую структуру с предупреждением
+                default_info = {
+                    "Ссылка на канал": channel_url,
+                    "Название канала": "⚠️ YouTube блокирует доступ",
+                    "Общее число просмотров": 0,
+                    "Количество видео": 0,
+                    "Возраст канала (дней)": 0,
+                    "Дата создания": "Неизвестно",
+                    "Количество подписчиков": "—",
+                    "Страна": "Неизвестно"
+                }
+                
+                # Сохраняем в кэш для предотвращения повторных запросов
+                channel_info_cache[channel_url] = default_info
+                return default_info
             
-            # Альтернативный поиск количества видео
-            if videos_count == 0:
-                videos_count_match = re.search(r'"videoCountText":\s*{"runs":\s*\[{"text":\s*"([^"]+)"', html_content)
-                videos_count_text = videos_count_match.group(1) if videos_count_match else "0"
-                videos_count = int(re.sub(r'[^\d]', '', videos_count_text)) if videos_count_match else 0
+            # 1. Извлекаем название канала
+            channel_name = None
+            name_patterns = [
+                r'<meta property="og:title" content="([^"]+)"',
+                r'<meta name="title" content="([^"]+)"',
+                r'"name":"([^"]+)"',
+                r'<title>([^<]+)</title>',
+                r'<link itemprop="name" content="([^"]+)">'
+            ]
             
-            channel_data = {
+            for pattern in name_patterns:
+                match = re.search(pattern, html)
+                if match:
+                    channel_name = match.group(1)
+                    # Убираем " - YouTube" из названия
+                    if " - YouTube" in channel_name:
+                        channel_name = channel_name.replace(" - YouTube", "")
+                    break
+            
+            # 2. Извлекаем информацию из метаданных канала
+            
+            # Сначала попробуем извлечь данные из JSON, которые обычно более точные
+            channel_json_data = None
+            initial_data_match = re.search(r'var ytInitialData = (.+?);</script>', html)
+            if initial_data_match:
+                try:
+                    channel_json_data = json.loads(initial_data_match.group(1))
+                except:
+                    logger.warning(f"Не удалось разобрать JSON данные канала: {about_url}")
+            
+            # 2.1 Извлекаем общее число просмотров
+            total_views = 0
+            
+            # Метод 1: Из JSON данных
+            if channel_json_data:
+                try:
+                    # Пытаемся найти блок с количеством просмотров
+                    header_renderer = channel_json_data.get('header', {}).get('c4TabbedHeaderRenderer', {})
+                    if not header_renderer:
+                        # Альтернативный путь для новой структуры данных
+                        header_renderer = channel_json_data.get('metadata', {}).get('channelMetadataRenderer', {})
+                    
+                    if header_renderer:
+                        # Проверяем разные варианты пути к данным о просмотрах
+                        if 'viewCountText' in header_renderer:
+                            views_text = header_renderer.get('viewCountText', {}).get('simpleText', '0')
+                            views_digits = re.findall(r'\d+', views_text.replace(',', '').replace(' ', ''))
+                            if views_digits:
+                                total_views = int(''.join(views_digits))
+                                # Отладочная информация
+                                logger.info(f"Найдено количество просмотров в JSON данных: {total_views} из текста: '{views_text}'")
+                        
+                        # Запасной вариант - поиск просмотров в общих метаданных
+                        if total_views == 0:
+                            metadata_renderer = channel_json_data.get('metadata', {}).get('channelMetadataRenderer', {})
+                            if metadata_renderer:
+                                view_count_str = metadata_renderer.get('viewCountText', '')
+                                if view_count_str:
+                                    views_digits = re.findall(r'\d+', view_count_str.replace(',', '').replace(' ', ''))
+                                    if views_digits:
+                                        total_views = int(''.join(views_digits))
+                                        logger.info(f"Найдено количество просмотров в metadata: {total_views}")
+                except Exception as e:
+                    logger.error(f"Ошибка при извлечении просмотров из JSON: {str(e)}")
+            
+            # Метод 2: Из HTML с помощью регулярных выражений
+            if total_views == 0:
+                try:
+                    # Сохраняем найденные совпадения для отладки
+                    views_debug = []
+                    
+                    views_patterns = [
+                        r'"viewCountText":\s*{\s*"simpleText":\s*"([^"]+)"',
+                        r'([0-9,\s]+) просмотров',
+                        r'([0-9,\s]+) views',
+                        r'"viewCount":\s*"([0-9]+)"',
+                        r'<meta itemprop="interactionCount" content="([0-9]+)"'
+                    ]
+                    
+                    for pattern in views_patterns:
+                        matches = re.findall(pattern, html)
+                        if matches:
+                            views_debug.append(f"Pattern '{pattern}' found: {matches}")
+                            for match in matches:
+                                try:
+                                    views_digits = re.findall(r'\d+', match.replace(',', '').replace(' ', ''))
+                                    if views_digits:
+                                        total_views = int(''.join(views_digits))
+                                        logger.info(f"Найдено количество просмотров через regex: {total_views} из '{match}'")
+                                        break
+                                except Exception as e:
+                                    logger.error(f"Ошибка при обработке match '{match}': {str(e)}")
+                        
+                        if total_views > 0:
+                            break
+                    
+                    # Если не нашли просмотры, записываем все совпадения для отладки
+                    if total_views == 0 and views_debug:
+                        logger.warning(f"Не удалось извлечь количество просмотров, хотя найдены совпадения: {views_debug}")
+                except Exception as e:
+                    logger.error(f"Ошибка при поиске просмотров через regex: {str(e)}")
+                
+            # Добавляем отладочную информацию
+            if total_views == 0:
+                logger.warning(f"Не удалось извлечь количество просмотров для канала {channel_url}")
+                
+            # 2.2 Извлекаем количество видео
+            video_count = 0
+            
+            # Метод 1: Из JSON данных
+            if channel_json_data:
+                try:
+                    # Проверяем разные пути к данным о количестве видео
+                    header_renderer = channel_json_data.get('header', {}).get('c4TabbedHeaderRenderer', {})
+                    if header_renderer:
+                        if 'videoCountText' in header_renderer:
+                            videos_text = header_renderer.get('videoCountText', {}).get('runs', [{}])[0].get('text', '0')
+                            videos_digits = re.findall(r'\d+', videos_text.replace(',', '').replace(' ', ''))
+                            if videos_digits:
+                                video_count = int(''.join(videos_digits))
+                except:
+                    pass
+            
+            # Метод 2: Из HTML с помощью регулярных выражений
+            if not video_count:
+                videos_patterns = [
+                    r'"videoCountText":\s*{\s*"runs":\s*\[\s*{\s*"text":\s*"([^"]+)"',
+                    r'([0-9,\s]+) videos',
+                    r'([0-9,\s]+) видео',
+                    r'"videoCount":\s*([0-9]+)'
+                ]
+                
+                for pattern in videos_patterns:
+                    match = re.search(pattern, html)
+                    if match:
+                        videos_text = match.group(1)
+                        try:
+                            videos_digits = re.findall(r'\d+', videos_text.replace(',', '').replace(' ', ''))
+                            if videos_digits:
+                                video_count = int(''.join(videos_digits))
+                                break
+                        except:
+                            continue
+            
+            # 2.3 Извлекаем дату создания канала
+            channel_created = None
+            
+            # Метод 1: Из JSON данных
+            if channel_json_data:
+                try:
+                    # Проверяем разные пути к данным о дате регистрации
+                    about_tab = None
+                    for tab in channel_json_data.get('contents', {}).get('twoColumnBrowseResultsRenderer', {}).get('tabs', []):
+                        if tab.get('tabRenderer', {}).get('title') == 'About':
+                            about_tab = tab
+                            break
+                    
+                    if about_tab:
+                        join_date_text = None
+                        # Ищем блок с информацией о регистрации
+                        content_blocks = about_tab.get('tabRenderer', {}).get('content', {}).get('sectionListRenderer', {}).get('contents', [])
+                        for block in content_blocks:
+                            items = block.get('itemSectionRenderer', {}).get('contents', [])
+                            for item in items:
+                                metadata = item.get('channelAboutFullMetadataRenderer', {})
+                                if metadata and 'joinedDateText' in metadata:
+                                    join_date_text = metadata.get('joinedDateText', {}).get('runs', [{}])[0].get('text', '')
+                        
+                        if join_date_text:
+                            # Преобразуем текст даты в формат datetime
+                            # Пример: "Joined Dec 15, 2015"
+                            join_date_match = re.search(r'([A-Za-z]+\s+\d+,\s+\d{4})', join_date_text)
+                            if join_date_match:
+                                try:
+                                    date_text = join_date_match.group(1)
+                                    channel_created = datetime.strptime(date_text, "%b %d, %Y")
+                                except:
+                                    try:
+                                        channel_created = datetime.strptime(date_text, "%B %d, %Y")
+                                    except:
+                                        pass
+                except:
+                    pass
+            
+            # Метод 2: Из HTML с помощью регулярных выражений
+            if not channel_created:
+                date_patterns = [
+                    r'"joinedDateText":\s*{\s*"runs":\s*\[\s*{\s*"text":\s*"[^"]*([0-9]{1,2}\s+[а-яА-Я]+\s+[0-9]{4})',
+                    r'Joined\s+([A-Za-z]+\s+[0-9]{1,2},\s+[0-9]{4})',
+                    r'"joinedDateText":\s*{\s*"simpleText":\s*"Joined\s+([^"]+)"',
+                    r'Дата регистрации:\s+([0-9]{1,2}\s+[а-яА-Я]+\s+[0-9]{4})'
+                ]
+                
+                for pattern in date_patterns:
+                    match = re.search(pattern, html)
+                    if match:
+                        date_text = match.group(1)
+                        try:
+                            # Попытка преобразовать русскую дату
+                            if re.search(r'[а-яА-Я]', date_text):
+                                ru_month_to_number = {
+                                    'янв': 1, 'фев': 2, 'мар': 3, 'апр': 4, 'май': 5, 'июн': 6,
+                                    'июл': 7, 'авг': 8, 'сен': 9, 'окт': 10, 'ноя': 11, 'дек': 12
+                                }
+                                
+                                date_parts = date_text.split()
+                                day = int(date_parts[0])
+                                month_text = date_parts[1].lower()[:3]  # Берем первые 3 буквы
+                                month = ru_month_to_number.get(month_text, 1)  # По умолчанию январь
+                                year = int(date_parts[2])
+                                
+                                channel_created = datetime(year, month, day)
+                            else:
+                                # Попытка преобразовать английскую дату
+                                try:
+                                    channel_created = datetime.strptime(date_text, "%b %d, %Y")
+                                except:
+                                    try:
+                                        channel_created = datetime.strptime(date_text, "%B %d, %Y")
+                                    except:
+                                        pass
+                            break
+                        except:
+                            continue
+            
+            # Вычисляем возраст канала в днях
+            channel_age = 0
+            if channel_created:
+                channel_age = (datetime.now() - channel_created).days
+            
+            # 2.4 Извлекаем количество подписчиков
+            subscribers_count = "—"  # По умолчанию неизвестно
+            
+            # Метод 1: Из JSON данных
+            if channel_json_data:
+                try:
+                    header_renderer = channel_json_data.get('header', {}).get('c4TabbedHeaderRenderer', {})
+                    if header_renderer:
+                        subscribers_text = header_renderer.get('subscriberCountText', {}).get('simpleText', '0')
+                        # Если указано "скрыто", то оставляем прочерк
+                        if not subscribers_text or "скрыто" in subscribers_text.lower() or "hidden" in subscribers_text.lower():
+                            subscribers_count = "—"
+                        else:
+                            # Очищаем текст и извлекаем число
+                            clean_text = subscribers_text.replace('subscribers', '').replace('подписчиков', '').strip()
+                            if "K" in clean_text or "тыс." in clean_text:
+                                # Преобразуем тысячи (K) в числа
+                                value = float(clean_text.replace("K", "").replace("тыс.", "").strip().replace(",", "."))
+                                subscribers_count = f"{int(value * 1000):,}".replace(",", " ")
+                            elif "M" in clean_text or "млн" in clean_text:
+                                # Преобразуем миллионы (M) в числа
+                                value = float(clean_text.replace("M", "").replace("млн", "").strip().replace(",", "."))
+                                subscribers_count = f"{int(value * 1000000):,}".replace(",", " ")
+                            else:
+                                # Просто удаляем нецифровые символы
+                                subscribers_digits = re.findall(r'\d+', clean_text.replace(',', '').replace(' ', ''))
+                                if subscribers_digits:
+                                    subscribers_count = f"{int(''.join(subscribers_digits)):,}".replace(",", " ")
+                except:
+                    pass
+            
+            # Метод 2: Из HTML с помощью регулярных выражений
+            if subscribers_count == "—":
+                subscribers_patterns = [
+                    r'"subscriberCountText":\s*{\s*"simpleText":\s*"([^"]+)"',
+                    r'(\d+[,\s]*\d*\s*[KkMmтыс.млн]*) subscribers',
+                    r'(\d+[,\s]*\d*\s*[KkMmтыс.млн]*) подписчиков'
+                ]
+                
+                for pattern in subscribers_patterns:
+                    match = re.search(pattern, html)
+                    if match:
+                        subscribers_text = match.group(1)
+                        
+                        # Если указано "скрыто", то оставляем прочерк
+                        if "скрыто" in subscribers_text.lower() or "hidden" in subscribers_text.lower():
+                            subscribers_count = "—"
+                        else:
+                            # Форматируем число подписчиков
+                            try:
+                                if "K" in subscribers_text or "тыс." in subscribers_text:
+                                    # Преобразуем тысячи (K) в числа
+                                    value = float(subscribers_text.replace("K", "").replace("тыс.", "").strip().replace(",", "."))
+                                    subscribers_count = f"{int(value * 1000):,}".replace(",", " ")
+                                elif "M" in subscribers_text or "млн" in subscribers_text:
+                                    # Преобразуем миллионы (M) в числа
+                                    value = float(subscribers_text.replace("M", "").replace("млн", "").strip().replace(",", "."))
+                                    subscribers_count = f"{int(value * 1000000):,}".replace(",", " ")
+                                else:
+                                    # Просто удаляем нецифровые символы
+                                    subscribers_digits = re.findall(r'\d+', subscribers_text.replace(',', '').replace(' ', ''))
+                                    if subscribers_digits:
+                                        subscribers_count = f"{int(''.join(subscribers_digits)):,}".replace(",", " ")
+                            except:
+                                subscribers_count = "—"
+                        break
+            
+            # 2.5 Извлекаем страну
+            country = "Неизвестно"
+            
+            # Метод 1: Из JSON данных
+            if channel_json_data:
+                try:
+                    # Проверяем разные пути к данным о стране
+                    about_tab = None
+                    for tab in channel_json_data.get('contents', {}).get('twoColumnBrowseResultsRenderer', {}).get('tabs', []):
+                        if tab.get('tabRenderer', {}).get('title') == 'About':
+                            about_tab = tab
+                            break
+                    
+                    if about_tab:
+                        # Ищем блок с информацией о стране
+                        content_blocks = about_tab.get('tabRenderer', {}).get('content', {}).get('sectionListRenderer', {}).get('contents', [])
+                        for block in content_blocks:
+                            items = block.get('itemSectionRenderer', {}).get('contents', [])
+                            for item in items:
+                                metadata = item.get('channelAboutFullMetadataRenderer', {})
+                                if metadata and 'country' in metadata:
+                                    country_text = metadata.get('country', {}).get('simpleText', 'Неизвестно')
+                                    if country_text and country_text != 'Неизвестно':
+                                        country = country_text
+                except:
+                    pass
+            
+            # Метод 2: Из HTML с помощью регулярных выражений
+            if country == "Неизвестно":
+                country_patterns = [
+                    r'"country":\s*{\s*"simpleText":\s*"([^"]+)"',
+                    r'Страна:\s+([^<]+)<',
+                    r'<div class="country">([^<]+)<'
+                ]
+                
+                for pattern in country_patterns:
+                    match = re.search(pattern, html)
+                    if match:
+                        country_text = match.group(1).strip()
+                        if country_text:
+                            country = country_text
+                            break
+            
+            # Собираем результат
+            result = {
                 "Ссылка на канал": channel_url,
-                "Название канала": channel_name,
-                "Общее число просмотров": views,
+                "Название канала": channel_name or "Неизвестно",
+                "Общее число просмотров": total_views,
+                "Количество видео": video_count,
                 "Возраст канала (дней)": channel_age,
-                "Количество видео": videos_count
+                "Дата создания": channel_created.strftime("%Y-%m-%d") if channel_created else "Неизвестно",
+                "Количество подписчиков": subscribers_count,
+                "Страна": country
             }
             
-            # Логируем найденные данные
-            logger.info(f"Найдена информация о канале {channel_url}: {channel_data}")
+            logger.info(f"Получена информация о канале {channel_url}: {result}")
             
-            # Кешируем информацию
-            channel_info_cache[channel_url] = channel_data
-            return channel_data
+            # Сохраняем в кэш
+            channel_info_cache[channel_url] = result
+            return result
             
-        except Exception as e:
-            logger.error(f"Ошибка при получении данных канала {channel_url}: {str(e)}")
-            # Продолжаем и возвращаем базовые данные
-        
-        # Если не удалось получить все данные, возвращаем базовую информацию
-        basic_info = {
-            "Ссылка на канал": channel_url,
-            "Название канала": channel_name,
-            "Общее число просмотров": 0,
-            "Возраст канала (дней)": 0,
-            "Количество видео": 0
-        }
-        
-        # Кешируем информацию
-        channel_info_cache[channel_url] = basic_info
-        return basic_info
-        
     except Exception as e:
-        logger.error(f"Ошибка при получении информации о канале {channel_url}: {str(e)}")
-        return {
-            "Ссылка на канал": channel_url,
-            "Название канала": "Неизвестно",
-            "Общее число просмотров": 0,
-            "Возраст канала (дней)": 0,
-            "Количество видео": 0
-        }
+        logger.error(f"Ошибка при получении информации о канале {channel_url}: {e}")
+    
+    # В случае ошибки возвращаем базовую информацию
+    default_info = {
+        "Ссылка на канал": channel_url,
+        "Название канала": "Неизвестно",
+        "Общее число просмотров": 0,
+        "Количество видео": 0,
+        "Возраст канала (дней)": 0,
+        "Дата создания": "Неизвестно",
+        "Количество подписчиков": "—",
+        "Страна": "Неизвестно"
+    }
+    
+    # Сохраняем в кэш даже дефолтные данные, чтобы не запрашивать повторно
+    channel_info_cache[channel_url] = default_info
+    return default_info
 
 def fetch_channel_data(channel_id, api_key):
     """
@@ -3028,85 +3816,55 @@ def get_video_details_fast(video_url):
         if response.status_code == 200:
             html = response.text
             
+            # Проверяем на страницу с ограничениями
+            if "consent.youtube.com" in html or "consent.google.com" in html:
+                logger.error(f"Получена страница согласия/предупреждения вместо страницы видео: {video_url}")
+                
+                # Сохраняем HTML страницы для диагностики
+                debug_dir = "debug_data"
+                os.makedirs(debug_dir, exist_ok=True)
+                file_path = os.path.join(debug_dir, f"video_{video_id}_consent_page.html")
+                try:
+                    with open(file_path, "w", encoding="utf-8") as f:
+                        f.write(html)
+                    logger.info(f"Сохранена HTML-страница согласия видео для отладки: {file_path}")
+                except Exception as e:
+                    logger.error(f"Не удалось сохранить HTML-страницу видео для отладки: {str(e)}")
+                
+                # Возвращаем базовую структуру с предупреждением
+                default_info = {
+                    "url": video_url,
+                    "title": f"⚠️ YouTube блокирует доступ ({video_id})",
+                    "views": 0,
+                    "publication_date": "01.01.2000",
+                    "channel_name": "⚠️ Доступ ограничен",
+                    "channel_url": None,
+                    "error": "YouTube требует подтверждение согласия"
+                }
+                video_cache[video_url] = default_info
+                return default_info
+            
             # Извлекаем название видео
             title = None
-            title_match = re.search(r'<meta property="og:title" content="([^"]+)"', html)
-            if title_match:
-                title = title_match.group(1)
-            else:
-                title_match = re.search(r'<meta name="title" content="([^"]+)"', html)
-                if title_match:
-                    title = title_match.group(1)
-                    
-            # Извлекаем канал
+            
+            # Здесь должен быть код для извлечения различных параметров видео
+            # Предполагаю, что отсутствует блок кода, который должен был быть здесь
+            # Например, строки для извлечения views, publication_date, channel_url и channel_name
+            views = 0
+            publication_date = None
             channel_url = None
             channel_name = None
             
-            # Ищем URL канала
-            channel_url_match = re.search(r'<link itemprop="url" href="([^"]+)">', html)
-            if channel_url_match:
-                channel_url = channel_url_match.group(1)
-            else:
-                # Альтернативные способы поиска URL канала
-                alt_channel_match = re.search(r'"channelUrl":"([^"]+)"', html)
-                if alt_channel_match:
-                    channel_url = alt_channel_match.group(1).replace("\\/", "/")
-                    if not channel_url.startswith("http"):
-                        channel_url = "https://www.youtube.com" + channel_url
-            
-            # Ищем имя канала
-            channel_name_match = re.search(r'<link itemprop="name" content="([^"]+)">', html)
-            if channel_name_match:
-                channel_name = channel_name_match.group(1)
-            else:
-                alt_name_match = re.search(r'"ownerChannelName":"([^"]+)"', html)
-                if alt_name_match:
-                    channel_name = alt_name_match.group(1)
-                    
-            # Извлекаем количество просмотров
-            views = None
-            views_match = re.search(r'"viewCount":"(\d+)"', html)
-            if views_match:
-                try:
-                    views = int(views_match.group(1))
-                except:
-                    pass
-            else:
-                # Альтернативные способы поиска просмотров
-                alt_views_match = re.search(r'<meta itemprop="interactionCount" content="(\d+)"', html)
-                if alt_views_match:
-                    try:
-                        views = int(alt_views_match.group(1))
-                    except:
-                        pass
-                        
-            # Извлекаем дату публикации
-            publication_date = None
-            date_match = re.search(r'"uploadDate":"([^"]+)"', html)
-            if date_match:
-                try:
-                    date_str = date_match.group(1)
-                    publication_date = datetime.strptime(date_str, "%Y-%m-%d")
-                except:
-                    pass
-            else:
-                # Альтернативные способы поиска даты
-                alt_date_match = re.search(r'<meta itemprop="datePublished" content="([^"]+)"', html)
-                if alt_date_match:
-                    try:
-                        date_str = alt_date_match.group(1)
-                        publication_date = datetime.strptime(date_str.split("T")[0], "%Y-%m-%d")
-                    except:
-                        pass
-            
+            # Создаем словарь с результатами
             result = {
-                "url": video_url,
                 "title": title or f"Видео {video_id}",
                 "views": views or 0,
                 "publication_date": publication_date,
                 "channel_url": channel_url,
                 "channel_name": channel_name
             }
+            
+            logger.info(f"Извлечены данные видео {video_url}: {result}")
             
             # Сохраняем в кэш
             video_cache[video_url] = result
@@ -3120,6 +3878,295 @@ def get_video_details_fast(video_url):
 # Инициализируем кэш для видео и каналов
 video_cache = {}
 channel_info_cache = {}
+
+# Функция для отображения раздела тестирования API каналов YouTube
+def render_api_tester_section():
+    """
+    Отображает раздел тестирования API каналов YouTube.
+    Позволяет получать информацию о каналах напрямую через API.
+    """
+    st.markdown("## Тестирование API каналов YouTube")
+    
+    with st.expander("Описание инструмента", expanded=False):
+        st.markdown("""
+        Этот инструмент позволяет тестировать сбор данных о YouTube каналах через YouTube Data API v3.
+        
+        **Принцип работы:**
+        1. Вы вводите список URL-адресов YouTube каналов (по одному на строку)
+        2. Инструмент собирает данные о каждом канале через официальный API YouTube
+        3. Результаты отображаются в таблице
+        
+        **Собираемые данные:**
+        - Название канала
+        - Количество видео
+        - Общее число просмотров
+        - Возраст канала (дней)
+        - Число подписчиков
+        - Страна
+        """)
+    
+    # Проверяем наличие API ключа
+    api_key = st.session_state.get("youtube_api_key")
+    if not api_key:
+        api_key = load_api_key_from_secrets()
+        if api_key:
+            st.session_state["youtube_api_key"] = api_key
+    
+    # Показываем статус API ключа
+    if api_key:
+        st.success("✅ YouTube API ключ загружен и готов к использованию")
+    else:
+        st.error("❌ YouTube API ключ не настроен. Добавьте его в файл .streamlit/secrets.toml")
+        with st.expander("Как настроить API ключ"):
+            st.markdown("""
+            1. Создайте файл `.streamlit/secrets.toml` со следующим содержимым:
+            ```toml
+            [youtube]
+            api_key = "ВАШ_КЛЮЧ_API_YOUTUBE"
+            ```
+            
+            2. Получите API ключ на странице: https://console.cloud.google.com/apis/credentials
+            3. Активируйте YouTube Data API v3 в Google Cloud Console
+            4. Перезапустите приложение
+            """)
+        return
+    
+    # Список каналов для тестирования
+    st.subheader("Список каналов для тестирования")
+    channels_input = st.text_area(
+        "Введите URL каналов YouTube (по одному на строку):",
+        placeholder="https://www.youtube.com/@ChannelName\nhttps://www.youtube.com/channel/UCXXXXXXXXXXXXXXXXXX",
+        height=150,
+        key="api_tester_channels_input"
+    )
+    
+    # Глобальная переменная для хранения результатов
+    if "api_test_results" not in st.session_state:
+        st.session_state.api_test_results = None
+    
+    # Кнопка для запуска тестирования
+    start_test = st.button("Собрать данные о каналах", key="start_api_test")
+    
+    # Обработка нажатия кнопки
+    if start_test and channels_input:
+        # Разбиваем текст на строки и фильтруем пустые
+        channel_urls = [url.strip() for url in channels_input.strip().split('\n') if url.strip()]
+        
+        if not channel_urls:
+            st.error("Пожалуйста, введите хотя бы один URL канала YouTube.")
+            return
+        
+        # Создаем прогресс-бар и сообщение о статусе
+        progress_bar = st.progress(0)
+        status_message = st.empty()
+        
+        status_message.info(f"Подготовка к сбору данных о {len(channel_urls)} каналах...")
+        progress_bar.progress(10)
+        
+        # Создаем экземпляр анализатора YouTube только для работы с API
+        api_analyzer = YouTubeAnalyzer(headless=True, use_proxy=False)
+        
+        # Запускаем сбор данных
+        channels_data = []
+        total_channels = len(channel_urls)
+        
+        for idx, url in enumerate(channel_urls):
+            try:
+                # Обновляем прогресс
+                progress = int(10 + (idx / total_channels) * 80)
+                progress_bar.progress(progress)
+                status_message.info(f"Обработка канала {idx+1}/{total_channels}: {url}")
+                
+                # Извлекаем ID канала из URL
+                channel_id = api_analyzer._extract_channel_id(url)
+                
+                if not channel_id:
+                    # Пытаемся определить ID канала через API по имени канала
+                    if "/@" in url or "/c/" in url or "/user/" in url:
+                        # Извлекаем имя канала из URL для поиска
+                        channel_name = None
+                        if "/@" in url:
+                            channel_name = url.split("/@")[1].split("/")[0]
+                        elif "/c/" in url:
+                            channel_name = url.split("/c/")[1].split("/")[0]
+                        elif "/user/" in url:
+                            channel_name = url.split("/user/")[1].split("/")[0]
+                        
+                        if channel_name:
+                            # Поиск канала через API
+                            search_url = "https://www.googleapis.com/youtube/v3/search"
+                            search_params = {
+                                'part': 'snippet',
+                                'q': channel_name,
+                                'type': 'channel',
+                                'maxResults': 1,
+                                'key': api_key
+                            }
+                            
+                            search_response = requests.get(search_url, params=search_params)
+                            if search_response.status_code == 200:
+                                search_data = search_response.json()
+                                if search_data.get('items') and len(search_data['items']) > 0:
+                                    channel_id = search_data['items'][0]['id']['channelId']
+                
+                if not channel_id:
+                    status_message.warning(f"Не удалось определить ID канала для URL: {url}. Пропускаю...")
+                    channels_data.append({
+                        "URL канала": url,
+                        "Название канала": "❌ Не удалось определить ID канала",
+                        "Количество видео": 0,
+                        "Общее число просмотров": 0,
+                        "Возраст канала (дней)": 0,
+                        "Количество подписчиков": 0,
+                        "Страна": "Неизвестно"
+                    })
+                    continue
+                
+                # Получаем данные о канале через API
+                channel_details = api_analyzer._get_channel_details_api(channel_id, api_key)
+                
+                if not channel_details:
+                    status_message.warning(f"Не удалось получить данные о канале: {url}. Пропускаю...")
+                    channels_data.append({
+                        "URL канала": url,
+                        "Название канала": "❌ Не удалось получить данные",
+                        "ID канала": channel_id,
+                        "Количество видео": 0,
+                        "Общее число просмотров": 0,
+                        "Возраст канала (дней)": 0,
+                        "Количество подписчиков": 0,
+                        "Страна": "Неизвестно"
+                    })
+                    continue
+                
+                # Формируем запись с данными канала
+                channel_data = {
+                    "URL канала": url,
+                    "ID канала": channel_id,
+                    "Название канала": channel_details.get("title", "Неизвестно"),
+                    "Количество видео": channel_details.get("video_count", 0),
+                    "Общее число просмотров": channel_details.get("view_count", 0),
+                    "Возраст канала (дней)": channel_details.get("channel_age_days", 0),
+                    "Количество подписчиков": channel_details.get("subscriber_count", 0),
+                    "Страна": channel_details.get("country", "Неизвестно")
+                }
+                
+                channels_data.append(channel_data)
+                status_message.success(f"Успешно получены данные о канале: {channel_details.get('title', 'Неизвестно')}")
+                
+            except Exception as e:
+                status_message.error(f"Ошибка при обработке канала {url}: {str(e)}")
+                channels_data.append({
+                    "URL канала": url,
+                    "Название канала": "❌ Ошибка при обработке",
+                    "Количество видео": 0,
+                    "Общее число просмотров": 0,
+                    "Возраст канала (дней)": 0,
+                    "Количество подписчиков": 0,
+                    "Страна": "Неизвестно",
+                    "Ошибка": str(e)
+                })
+        
+        # Завершаем прогресс
+        progress_bar.progress(100)
+        
+        if channels_data:
+            # Преобразуем в DataFrame
+            channels_df = pd.DataFrame(channels_data)
+            st.session_state.api_test_results = channels_df
+            status_message.success(f"Сбор данных завершен. Получена информация о {len(channels_data)} каналах.")
+        else:
+            status_message.error("Не удалось собрать данные ни об одном канале.")
+    
+    # Отображаем результаты, если они есть
+    if st.session_state.api_test_results is not None and not st.session_state.api_test_results.empty:
+        st.subheader("Результаты тестирования API")
+        
+        results_df = st.session_state.api_test_results
+        
+        # Форматируем числовые колонки
+        if "Общее число просмотров" in results_df.columns:
+            results_df["Общее число просмотров"] = results_df["Общее число просмотров"].apply(
+                lambda x: f"{int(x):,}".replace(",", " ") if isinstance(x, (int, float)) else x
+            )
+        
+        if "Количество подписчиков" in results_df.columns:
+            results_df["Количество подписчиков"] = results_df["Количество подписчиков"].apply(
+                lambda x: f"{int(x):,}".replace(",", " ") if isinstance(x, (int, float)) else x
+            )
+        
+        if "Количество видео" in results_df.columns:
+            results_df["Количество видео"] = results_df["Количество видео"].apply(
+                lambda x: f"{int(x):,}".replace(",", " ") if isinstance(x, (int, float)) else x
+            )
+        
+        # Добавляем ссылки на каналы
+        def make_clickable(url, text=None):
+            text = text or url
+            return f'<a href="{url}" target="_blank">{text}</a>'
+        
+        if "URL канала" in results_df.columns and "Название канала" in results_df.columns:
+            results_df["Название канала"] = results_df.apply(
+                lambda row: make_clickable(row["URL канала"], row["Название канала"]) 
+                if not row["Название канала"].startswith("❌") else row["Название канала"],
+                axis=1
+            )
+        
+        # Исключаем некоторые колонки для отображения
+        display_columns = [col for col in results_df.columns if col not in ["ID канала", "URL канала", "Ошибка"]]
+        
+        # Отображаем таблицу
+        st.write(results_df[display_columns].to_html(escape=False), unsafe_allow_html=True)
+        
+        # Добавляем статистику
+        with st.expander("Статистика по каналам", expanded=False):
+            # Собираем статистику по числовым данным
+            numeric_df = results_df.copy()
+            
+            # Преобразуем отформатированные числа обратно в числовые для расчетов
+            for col in ["Общее число просмотров", "Количество подписчиков", "Количество видео"]:
+                if col in numeric_df.columns:
+                    numeric_df[col] = pd.to_numeric(numeric_df[col].str.replace(" ", ""), errors="coerce")
+            
+            # Общие показатели
+            total_views = numeric_df["Общее число просмотров"].sum()
+            total_subs = numeric_df["Количество подписчиков"].sum()
+            total_videos = numeric_df["Количество видео"].sum()
+            
+            # Отображаем общие показатели
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("Общее число просмотров", f"{int(total_views):,}".replace(",", " "))
+            with col2:
+                st.metric("Общее число подписчиков", f"{int(total_subs):,}".replace(",", " "))
+            with col3:
+                st.metric("Общее число видео", f"{int(total_videos):,}".replace(",", " "))
+            
+            # Средние показатели
+            avg_views = numeric_df["Общее число просмотров"].mean()
+            avg_subs = numeric_df["Количество подписчиков"].mean()
+            avg_videos = numeric_df["Количество видео"].mean()
+            avg_age = numeric_df["Возраст канала (дней)"].mean()
+            
+            # Отображаем средние показатели
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                st.metric("Среднее число просмотров", f"{int(avg_views):,}".replace(",", " "))
+            with col2:
+                st.metric("Среднее число подписчиков", f"{int(avg_subs):,}".replace(",", " "))
+            with col3:
+                st.metric("Среднее число видео", f"{int(avg_videos):,}".replace(",", " "))
+            with col4:
+                st.metric("Средний возраст канала", f"{int(avg_age)} дней")
+        
+        # Добавляем кнопку для скачивания результатов
+        csv = results_df.to_csv(index=False).encode('utf-8')
+        st.download_button(
+            label="Скачать результаты как CSV",
+            data=csv,
+            file_name="youtube_channels_api_test.csv",
+            mime="text/csv",
+        )
 
 if __name__ == "__main__":
     main() 
