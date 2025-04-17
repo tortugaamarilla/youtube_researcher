@@ -2060,6 +2060,241 @@ class YouTubeAnalyzer:
             logger.error(traceback.format_exc())
             return None
 
+    def _get_video_details_api(self, video_id: str, api_key: str) -> Optional[Dict[str, Any]]:
+        """
+        Получает детальную информацию о видео через API.
+        
+        Args:
+            video_id (str): ID видео
+            api_key (str): Ключ API YouTube
+            
+        Returns:
+            Optional[Dict[str, Any]]: Словарь с информацией о видео или None в случае ошибки
+        """
+        try:
+            base_url = "https://www.googleapis.com/youtube/v3/videos"
+            params = {
+                'part': 'snippet,statistics,contentDetails',
+                'id': video_id,
+                'key': api_key
+            }
+            
+            logger.info(f"Запрос деталей видео {video_id}: {base_url} с параметрами {params}")
+            response = requests.get(base_url, params=params)
+            
+            if response.status_code != 200:
+                logger.warning(f"Ошибка API при получении деталей видео: {response.status_code}")
+                logger.warning(f"Ответ API: {response.text}")
+                return None
+                
+            data = response.json()
+            
+            if not data.get('items'):
+                logger.warning(f"API не вернул данные для видео {video_id}")
+                return None
+                
+            video_info = data['items'][0]
+            snippet = video_info.get('snippet', {})
+            statistics = video_info.get('statistics', {})
+            content_details = video_info.get('contentDetails', {})
+            
+            # Форматирование даты публикации
+            published_at = snippet.get('publishedAt')
+            formatted_date = None
+            
+            if published_at:
+                try:
+                    # Обработка формата даты
+                    if '.' in published_at:
+                        # Если есть микросекунды, отрезаем их
+                        date_part = published_at.split('.')[0]
+                        published_date = datetime.strptime(date_part + 'Z', "%Y-%m-%dT%H:%M:%SZ")
+                    else:
+                        # Для формата без микросекунд
+                        published_date = datetime.strptime(published_at, "%Y-%m-%dT%H:%M:%SZ")
+                    
+                    # Форматируем дату в нужный формат
+                    formatted_date = published_date.strftime("%Y-%m-%d %H:%M")
+                except ValueError as e:
+                    logger.warning(f"Не удалось обработать дату публикации видео: {published_at}, ошибка: {e}")
+            
+            # Получаем количество просмотров
+            view_count = 0
+            try:
+                view_count = int(statistics.get('viewCount', 0))
+            except (ValueError, TypeError):
+                logger.warning(f"Не удалось преобразовать viewCount в число: {statistics.get('viewCount')}")
+            
+            # Получаем URL превью
+            thumbnail_url = ""
+            thumbnails = snippet.get('thumbnails', {})
+            if 'maxres' in thumbnails:
+                thumbnail_url = thumbnails['maxres'].get('url', '')
+            elif 'high' in thumbnails:
+                thumbnail_url = thumbnails['high'].get('url', '')
+            elif 'medium' in thumbnails:
+                thumbnail_url = thumbnails['medium'].get('url', '')
+            elif 'standard' in thumbnails:
+                thumbnail_url = thumbnails['standard'].get('url', '')
+            elif 'default' in thumbnails:
+                thumbnail_url = thumbnails['default'].get('url', '')
+            
+            # Получаем транскрипцию (для этого требуется отдельный запрос к API captions)
+            transcript = self._get_video_transcript(video_id, api_key)
+            
+            # Получаем название категории видео
+            category_id = snippet.get('categoryId', '')
+            category_name = "Неизвестно"
+            if category_id:
+                category_name = self._get_video_category_name(category_id, api_key)
+            
+            # Формируем результат
+            result = {
+                "id": video_id,
+                "url": f"https://www.youtube.com/watch?v={video_id}",
+                "title": snippet.get('title', 'Неизвестно'),
+                "description": snippet.get('description', ''),
+                "channel_title": snippet.get('channelTitle', 'Неизвестно'),
+                "channel_id": snippet.get('channelId', ''),
+                "publication_date": formatted_date,
+                "view_count": view_count,
+                "category": category_name,
+                "language": snippet.get('defaultLanguage', snippet.get('defaultAudioLanguage', 'Неизвестно')),
+                "thumbnail_url": thumbnail_url,
+                "transcript": transcript
+            }
+            
+            logger.info(f"Получены детали видео: {result['title']}, просмотров: {result['view_count']}")
+            return result
+            
+        except Exception as e:
+            logger.error(f"Ошибка при получении деталей видео {video_id} через API: {str(e)}")
+            logger.error(traceback.format_exc())
+            return None
+            
+    def _get_video_transcript(self, video_id: str, api_key: str) -> str:
+        """
+        Получает транскрипцию видео через API.
+        
+        Args:
+            video_id (str): ID видео
+            api_key (str): Ключ API YouTube
+            
+        Returns:
+            str: Текст транскрипции или пустую строку, если транскрипция не найдена
+        """
+        try:
+            # Сначала получаем список доступных субтитров
+            captions_url = "https://www.googleapis.com/youtube/v3/captions"
+            captions_params = {
+                'part': 'snippet',
+                'videoId': video_id,
+                'key': api_key
+            }
+            
+            logger.info(f"Запрос списка субтитров для видео {video_id}")
+            captions_response = requests.get(captions_url, params=captions_params)
+            
+            if captions_response.status_code != 200:
+                logger.warning(f"Ошибка API при получении списка субтитров: {captions_response.status_code}")
+                return "Транскрипция недоступна"
+                
+            captions_data = captions_response.json()
+            
+            if not captions_data.get('items'):
+                logger.warning(f"Субтитры не найдены для видео {video_id}")
+                return "Транскрипция недоступна"
+            
+            # API не позволяет напрямую получить текст субтитров без авторизации
+            # Поэтому возвращаем информацию о наличии субтитров
+            caption_count = len(captions_data.get('items', []))
+            languages = [item.get('snippet', {}).get('language', 'unknown') for item in captions_data.get('items', [])]
+            
+            return f"Доступно {caption_count} вариантов субтитров. Языки: {', '.join(languages)}"
+            
+        except Exception as e:
+            logger.error(f"Ошибка при получении транскрипции видео {video_id}: {str(e)}")
+            return "Ошибка при получении транскрипции"
+
+    def _get_video_category_name(self, category_id: str, api_key: str) -> str:
+        """
+        Получает название категории видео по её ID.
+        
+        Args:
+            category_id (str): ID категории
+            api_key (str): Ключ API YouTube
+            
+        Returns:
+            str: Название категории или 'Неизвестно', если категория не найдена
+        """
+        # Словарь с часто используемыми категориями для уменьшения количества запросов к API
+        common_categories = {
+            "1": "Фильмы и анимация",
+            "2": "Автомобили и транспорт",
+            "10": "Музыка",
+            "15": "Животные",
+            "17": "Спорт",
+            "18": "Короткометражное кино",
+            "19": "Путешествия и события",
+            "20": "Игры",
+            "21": "Видеоблоги",
+            "22": "Люди и блоги",
+            "23": "Комедия",
+            "24": "Развлечения",
+            "25": "Новости и политика",
+            "26": "Практические советы и стиль",
+            "27": "Образование",
+            "28": "Наука и технологии",
+            "29": "Некоммерческие и социальные проекты",
+            "30": "Фильмы",
+            "31": "Мультфильмы/Аниме",
+            "32": "Экшен/Приключения",
+            "33": "Классика",
+            "34": "Комедия",
+            "35": "Документальное",
+            "36": "Драма",
+            "37": "Семейное",
+            "38": "Иностранное",
+            "39": "Ужасы",
+            "40": "Sci-Fi/Fantasy",
+            "41": "Триллеры",
+            "42": "Короткометражки",
+            "43": "Шоу",
+            "44": "Трейлеры"
+        }
+        
+        # Если категория в словаре, возвращаем её название
+        if category_id in common_categories:
+            return common_categories[category_id]
+            
+        # Иначе делаем запрос к API
+        try:
+            base_url = "https://www.googleapis.com/youtube/v3/videoCategories"
+            params = {
+                'part': 'snippet',
+                'id': category_id,
+                'key': api_key
+            }
+            
+            logger.info(f"Запрос категории видео {category_id}")
+            response = requests.get(base_url, params=params)
+            
+            if response.status_code != 200:
+                logger.warning(f"Ошибка API при получении категории видео: {response.status_code}")
+                return "Неизвестно"
+                
+            data = response.json()
+            
+            if not data.get('items'):
+                logger.warning(f"API не вернул данные для категории {category_id}")
+                return "Неизвестно"
+                
+            return data['items'][0].get('snippet', {}).get('title', 'Неизвестно')
+            
+        except Exception as e:
+            logger.error(f"Ошибка при получении категории видео {category_id}: {str(e)}")
+            return "Неизвестно"
+
     def login_to_google(self) -> bool:
         """
         Авторизация в Google аккаунте.
