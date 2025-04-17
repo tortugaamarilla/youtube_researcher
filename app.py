@@ -1228,43 +1228,43 @@ def test_recommendations(source_links: List[str],
                     video_data_time = end_timer(f"Получение данных о видео: {video_url}")
                     status_text.text(f"Получены данные о видео за {video_data_time:.2f}с")
                     
-                    # Проверяем, соответствует ли видео с исходного канала заданным параметрам
+                    # ИЗМЕНЕНИЯ: Получаем рекомендации для всех видео, но в source_videos добавляем только соответствующие критериям
+                    
+                    # Получаем рекомендации для этого видео независимо от критериев
+                    status_text.text(f"Получение рекомендаций для видео: {video_url}")
+                    start_timer(f"Получение рекомендаций для видео: {video_url}")
+                    # Используем быстрый метод вместо обычного
+                    recommendations = youtube_analyzer.get_recommended_videos_fast(video_url, limit=recommendations_per_video)
+                    rec_time = end_timer(f"Получение рекомендаций для видео: {video_url}")
+                    status_text.text(f"Получены рекомендации ({len(recommendations)}) за {rec_time:.2f}с")
+                    logger.info(f"Получено {len(recommendations)} рекомендаций для видео {video_url}")
+                    
+                    # Сохраняем URL рекомендаций для последующей обработки
+                    recommendation_urls = []
+                    for rec_info in recommendations:
+                        rec_url = rec_info.get("url")
+                        if rec_url:
+                            # Очищаем URL от параметров
+                            clean_rec_url = clean_youtube_url(rec_url)
+                            recommendation_urls.append({
+                                "url": clean_rec_url,
+                                "source_video": clean_youtube_url(video_url)
+                            })
+                    
+                    # Добавляем все рекомендации для этого видео в общий список
+                    all_recommendations.extend(recommendation_urls)
+                    logger.info(f"Добавлено {len(recommendation_urls)} рекомендаций для видео {video_url}")
+                    
+                    # Проверяем, соответствует ли видео с исходного канала заданным параметрам 
+                    # для добавления в таблицу источников
                     if video_data and quick_filter_video(video_data):
                         video_data["source"] = f"Канал: {link}"
                         source_videos.append(video_data)
                         stats["added_videos"] += 1
-                        
-                        # Получаем рекомендации для этого видео
-                        status_text.text(f"Получение рекомендаций для видео: {video_url}")
-                        start_timer(f"Получение рекомендаций для видео: {video_url}")
-                        # Используем быстрый метод вместо обычного
-                        recommendations = youtube_analyzer.get_recommended_videos_fast(video_url, limit=recommendations_per_video)
-                        rec_time = end_timer(f"Получение рекомендаций для видео: {video_url}")
-                        status_text.text(f"Получены рекомендации ({len(recommendations)}) за {rec_time:.2f}с")
-                        logger.info(f"Получено {len(recommendations)} рекомендаций для видео {video_url}")
-                        
-                        # Сохраняем URL рекомендаций для последующей обработки
-                        recommendation_urls = []
-                        for rec_info in recommendations:
-                            rec_url = rec_info.get("url")
-                            if rec_url:
-                                # Очищаем URL от параметров
-                                clean_rec_url = clean_youtube_url(rec_url)
-                                recommendation_urls.append({
-                                    "url": clean_rec_url,
-                                    "source_video": clean_youtube_url(video_url)
-                                })
-                        
-                        # Добавляем все рекомендации для этого видео в общий список
-                        all_recommendations.extend(recommendation_urls)
-                        logger.info(f"Добавлено {len(recommendation_urls)} рекомендаций для видео {video_url}")
                     else:
-                        # Если видео не соответствует критериям, пропускаем его
+                        # Если видео не соответствует критериям, пропускаем его добавление в итоговую таблицу
                         if video_data:
-                            status_text.text(f"Видео не соответствует критериям, пропускаем: {video_url}")
-                    
-                    # Временно отключаем обновление статистики для каждого видео
-                    # update_stats()
+                            status_text.text(f"Видео не соответствует критериям, не добавлено в таблицу: {video_url}")
                 
                 # Обновляем статистику принудительно после обработки всех видео с канала
                 # Передаем только видео и рекомендации с текущего канала, а не общее количество
@@ -1294,40 +1294,42 @@ def test_recommendations(source_links: List[str],
                 status_text.text(f"Получены данные о видео за {video_data_time:.2f}с")
                 stats["processed_videos"] += 1
                 
-                # Проверяем, соответствует ли видео заданным параметрам
+                # ИЗМЕНЕНИЯ: Получаем рекомендации для всех видео, но в source_videos добавляем только соответствующие критериям
+                
+                # Получаем рекомендации для видео независимо от критериев
+                status_text.text(f"Получение рекомендаций для видео: {url}")
+                start_timer(f"Получение рекомендаций для видео: {url}")
+                # Используем быстрый метод вместо обычного
+                recommendations = youtube_analyzer.get_recommended_videos_fast(url, limit=recommendations_per_video)
+                rec_time = end_timer(f"Получение рекомендаций для видео: {url}")
+                status_text.text(f"Получены рекомендации ({len(recommendations)}) за {rec_time:.2f}с")
+                logger.info(f"Получено {len(recommendations)} рекомендаций для видео {url}")
+                
+                # Сохраняем URL рекомендаций для последующей обработки
+                recommendation_urls = []
+                for rec_info in recommendations:
+                    rec_url = rec_info.get("url")
+                    if rec_url:
+                        # Очищаем URL от параметров
+                        clean_rec_url = clean_youtube_url(rec_url)
+                        recommendation_urls.append({
+                            "url": clean_rec_url,
+                            "source_video": clean_youtube_url(url)
+                        })
+                
+                # Добавляем все рекомендации для этого видео в общий список
+                all_recommendations.extend(recommendation_urls)
+                logger.info(f"Добавлено {len(recommendation_urls)} рекомендаций для видео {url}")
+                
+                # Проверяем, соответствует ли видео заданным параметрам для добавления в таблицу
                 if video_data and quick_filter_video(video_data):
                     video_data["source"] = f"Прямая ссылка: {link}"
                     source_videos.append(video_data)
                     stats["added_videos"] += 1
-                    
-                    # Получаем рекомендации для видео
-                    status_text.text(f"Получение рекомендаций для видео: {url}")
-                    start_timer(f"Получение рекомендаций для видео: {url}")
-                    # Используем быстрый метод вместо обычного
-                    recommendations = youtube_analyzer.get_recommended_videos_fast(url, limit=recommendations_per_video)
-                    rec_time = end_timer(f"Получение рекомендаций для видео: {url}")
-                    status_text.text(f"Получены рекомендации ({len(recommendations)}) за {rec_time:.2f}с")
-                    logger.info(f"Получено {len(recommendations)} рекомендаций для видео {url}")
-                    
-                    # Сохраняем URL рекомендаций для последующей обработки
-                    recommendation_urls = []
-                    for rec_info in recommendations:
-                        rec_url = rec_info.get("url")
-                        if rec_url:
-                            # Очищаем URL от параметров
-                            clean_rec_url = clean_youtube_url(rec_url)
-                            recommendation_urls.append({
-                                "url": clean_rec_url,
-                                "source_video": clean_youtube_url(url)
-                            })
-                    
-                    # Добавляем все рекомендации для этого видео в общий список
-                    all_recommendations.extend(recommendation_urls)
-                    logger.info(f"Добавлено {len(recommendation_urls)} рекомендаций для видео {url}")
                 else:
-                    # Если видео не соответствует критериям, пропускаем его
+                    # Если видео не соответствует критериям, пропускаем его добавление в итоговую таблицу
                     if video_data:
-                        status_text.text(f"Видео не соответствует критериям, пропускаем: {url}")
+                        status_text.text(f"Видео не соответствует критериям, не добавлено в таблицу: {url}")
                 
                 # Временно отключаем обновление статистики для прямой ссылки
                 # update_stats()
@@ -1913,7 +1915,7 @@ def main():
                 max_days_since_publication = st.number_input(
                     "Время с момента публикации (дней)", 
                     min_value=1, 
-                    max_value=3650,  # Увеличено до 10 лет (3650 дней)
+                    max_value=100000,  # Увеличено до 10 лет (3650 дней)
                     value=7
                 )
             with col4:
@@ -1985,7 +1987,7 @@ def main():
                 max_days = st.number_input(
                     "Максимальное количество дней после публикации", 
                     min_value=1,
-                    max_value=3650,  # Добавлено максимальное значение 10 лет (3650 дней)
+                    max_value=100000,  # Добавлено максимальное значение 10 лет (3650 дней)
                     value=30, 
                     step=1
                 )
