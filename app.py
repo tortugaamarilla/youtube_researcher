@@ -7,6 +7,7 @@ from module_auth import render_auth_section
 from module_recommendations import render_recommendations_section
 from module_channel_api_tester import render_api_tester_section, load_api_key_from_secrets
 from module_video_api_tester import render_video_api_tester_section
+from module_commenters_analyzer import render_commenters_analyzer_section
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO, 
@@ -64,7 +65,7 @@ def main():
     st.title("YouTube Researcher 🎬")
 
     # Создаем вкладки
-    tab0, tab1, tab2, tab3 = st.tabs(["Авторизация в Google", "Получение рекомендаций", "Тест API каналов", "Тест API видео"])
+    tab0, tab1, tab2, tab3, tab4 = st.tabs(["Авторизация в Google", "Получение рекомендаций", "Тест API каналов", "Тест API видео", "Анализ комментаторов"])
     
     with tab0:
         # Раздел авторизации в Google
@@ -81,6 +82,10 @@ def main():
     with tab3:
         # Раздел для тестирования API видео
         render_video_api_tester_section()
+        
+    with tab4:
+        # Раздел для анализа комментаторов
+        render_commenters_analyzer_section()
 
 if __name__ == "__main__":
     # Настройка страницы Streamlit (должно быть первой командой)
