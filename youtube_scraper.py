@@ -29,6 +29,7 @@ import pandas as pd
 import tempfile
 import zipfile
 import socket
+import streamlit as st
 
 from utils import get_random_proxy, parse_youtube_url, get_proxy_list
 
@@ -1819,9 +1820,10 @@ class YouTubeAnalyzer:
                 username = username_match.group(1)
                 logger.info(f"Найдено пользовательское имя канала: @{username}")
                 
-                # Поскольку мы не можем напрямую получить ID канала из @username,
-                # нам нужно использовать API для поиска канала
-                if hasattr(st, 'secrets') and 'youtube' in st.secrets and 'api_key' in st.secrets['youtube']:
+                # Проверяем доступность модуля Streamlit и параметров API
+                api_key = None
+                # Получаем API-ключ из параметров Streamlit, если доступен
+                if 'st' in globals() and hasattr(st, 'secrets') and 'youtube' in st.secrets and 'api_key' in st.secrets['youtube']:
                     api_key = st.secrets['youtube']['api_key']
                     logger.info(f"Попытка получить ID канала через API для @{username}")
                     
@@ -1857,8 +1859,10 @@ class YouTubeAnalyzer:
                 username = user_match.group(2)
                 logger.info(f"Найден формат URL канала: {user_type}/{username}")
                 
-                # Используем API для получения ID канала
-                if hasattr(st, 'secrets') and 'youtube' in st.secrets and 'api_key' in st.secrets['youtube']:
+                # Проверяем доступность модуля Streamlit и параметров API
+                api_key = None
+                # Получаем API-ключ из параметров Streamlit, если доступен
+                if 'st' in globals() and hasattr(st, 'secrets') and 'youtube' in st.secrets and 'api_key' in st.secrets['youtube']:
                     api_key = st.secrets['youtube']['api_key']
                     logger.info(f"Попытка получить ID канала через API для {user_type}/{username}")
                     
@@ -1886,7 +1890,10 @@ class YouTubeAnalyzer:
                         logger.error(f"Ошибка при получении ID канала через API: {e}")
             
             # Если ни один метод не сработал, пробуем прямой запрос через API с использованием URL как запроса
-            if hasattr(st, 'secrets') and 'youtube' in st.secrets and 'api_key' in st.secrets['youtube']:
+            # Проверяем доступность модуля Streamlit и параметров API
+            api_key = None
+            # Получаем API-ключ из параметров Streamlit, если доступен
+            if 'st' in globals() and hasattr(st, 'secrets') and 'youtube' in st.secrets and 'api_key' in st.secrets['youtube']:
                 api_key = st.secrets['youtube']['api_key']
                 logger.info(f"Попытка получить ID канала через API по прямому запросу: {channel_url}")
                 
